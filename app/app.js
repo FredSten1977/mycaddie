@@ -64,6 +64,12 @@ async function rateCourse(kind, course_name, stars, tm_course_id) {
     rated_at: new Date().toISOString() }, { onConflict: 'owner_id,kind,course_key' }));
   invalidate('courses');
 }
+function playedBadge(c) {
+  const p = c.playedInfo;
+  if (!p) return `<span class="pbadge new">Ny for deg</span>`;
+  const when = new Date(p.last).toLocaleDateString('nb-NO', { month: 'short', year: 'numeric' });
+  return `<span class="pbadge played">✓ Spilt ${p.rounds}× · sist ${when}</span>`;
+}
 const diffBar = (d) => d ? `<span class="diff" title="Vanskelighet ${d} av 5">${[1, 2, 3, 4, 5].map((i) => `<i class="${i <= d ? 'on' : ''}"></i>`).join('')}</span>` : '';
 const imgStyle = (url) => url ? `background-image:url('${esc(url)}')` : '';
 function scoreBadge(strokes, par) {
@@ -317,19 +323,21 @@ async function renderCourses() {
   const maxScore = Math.max(0.0001, ...res.picks.map((c) => c.score));
   const card = (c, i, showMatch) => `<div class="ccard"><div class="img" style="${imgStyle(c.image_url)}">
       ${showMatch ? `<span class="match">${Math.round(Math.max(0.35, c.score / maxScore) * 100)} % match</span>` : ''}
+      ${playedBadge(c)}
       ${(c.tags || []).includes('Links') ? '<span class="tag">Links</span>' : (c.tags || []).includes('TourVenue') ? '<span class="tag">Tour</span>' : ''}</div>
       <div class="body"><div class="t">${esc(c.name)}</div>
       <div class="m">${esc(c.location || '')}</div>
       <div class="m">${c.par ? 'Par ' + c.par : ''}${c.length_m ? ' · ' + fmt(c.length_m) + ' m' : ''} ${diffBar(c.difficulty)}</div>
-      ${c.reason ? `<div class="why">${esc(c.reason)}</div>` : ''}${c.played ? '<div class="why"><span class="chip">spilt</span></div>' : ''}</div></div>`;
+      ${c.reason ? `<div class="why">${esc(c.reason)}</div>` : ''}</div></div>`;
   const draw = () => {
     const s = courseState.search.trim().toLowerCase();
     if (s) {
       const hits = catalog.filter((c) => (c.name + ' ' + (c.location || '')).toLowerCase().includes(s)).slice(0, 24)
-        .map((c) => ({ ...c, played: overview.some((o) => o.tm_course_id === c.id || nameKey(o.course_name) === c.name_key) }));
+        .map((c) => { const o = overview.find((x) => x.kind === 'simulator' && (x.tm_course_id === c.id || nameKey(x.course_name) === c.name_key));
+          return { ...c, playedInfo: o ? { rounds: o.rounds, last: o.last_played, stars: o.stars } : null }; });
       clist.innerHTML = `<h2>Søk</h2>${hits.length ? `<div class="ccards">${hits.map((c, i) => card(c, i, false)).join('')}</div>` : '<div class="empty">Ingen treff</div>'}`;
     } else {
-      clist.innerHTML = `<h2>Nye baner du trolig vil like</h2><div class="ccards">${res.picks.map((c, i) => card(c, i, true)).join('')}</div>`;
+      clist.innerHTML = `<h2>Baner du trolig vil like</h2><div class="ccards">${res.picks.map((c, i) => card(c, i, true)).join('')}</div>`;
     }
   };
   draw();

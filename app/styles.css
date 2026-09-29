@@ -163,6 +163,9 @@ svg .ell-lab { fill: var(--ink); font-size: 11px; font-weight: 600; paint-order:
 .ccard .img { position: relative; height: 128px; background: linear-gradient(135deg, var(--hero-1), var(--hero-2)) center/cover no-repeat; }
 .ccard .img .match { position: absolute; left: 10px; bottom: 10px; background: rgba(0,0,0,.6); color: #fff; font-size: 12px; font-weight: 700; padding: 3px 9px; border-radius: 999px; backdrop-filter: blur(4px); }
 .ccard .img .tag { position: absolute; right: 10px; top: 10px; background: rgba(255,255,255,.92); color: #0f1d16; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 999px; }
+.pbadge { position: absolute; left: 10px; top: 10px; font-size: 11px; font-weight: 700; padding: 3px 9px; border-radius: 999px; }
+.pbadge.new { background: var(--gold); color: #1d1600; }
+.pbadge.played { background: rgba(255,255,255,.94); color: #0f4f31; }
 .ccard .body { padding: 12px 14px 14px; }
 .ccard .t { font-weight: 700; line-height: 1.25; }
 .ccard .m { font-size: 12px; color: var(--muted); margin-top: 2px; }

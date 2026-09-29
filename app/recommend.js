@@ -68,10 +68,12 @@ export function recommend(catalog, played, { limit = 15 } = {}) {
   // anchors = played courses found in the catalog, with a weight from the stars
   const anchors = [];
   const playedIds = new Set();
+  const playedInfo = new Map();
   for (const p of played) {
     const c = (p.tm_course_id && byId.get(p.tm_course_id)) || byKey.get(key(p.course_name));
     if (!c) continue;
     playedIds.add(c.id);
+    playedInfo.set(c.id, { rounds: p.rounds, last: p.last_played, stars: p.stars });
     const w = p.stars ? p.stars - 3 : 0.3 * Math.log1p(p.rounds);
     if (w) anchors.push({ c, f: feats.get(c.id), w, stars: p.stars, name: c.name });
   }
@@ -81,18 +83,24 @@ export function recommend(catalog, played, { limit = 15 } = {}) {
   const taste = {};
   for (const a of anchors) if (a.w > 0) for (const k in a.f) if (k[0] !== '_' && a.f[k] > 0) taste[k] = (taste[k] || 0) + a.w * a.f[k];
 
-  const candidates = catalog.filter((c) => !playedIds.has(c.id) && !c.fictional && (c.holes || 18) >= 18
+  // played courses stay in the list (marked), unless you gave them 1–2 stars
+  const candidates = catalog.filter((c) => !(playedInfo.get(c.id)?.stars <= 2) && !c.fictional && (c.holes || 18) >= 18
     && !(c.tags || []).includes('Par3Course') && !(c.tags || []).includes('test'));
 
   const scored = candidates.map((c) => {
     const f = feats.get(c.id);
     let s = 0, best = null;
     for (const a of anchors) {
+      if (a.c.id === c.id) continue; // a course is not evidence for itself
       const sim = cosine(f, a.f);
       s += a.w * sim;
       if (a.w > 0 && (!best || a.w * sim > best.v)) best = { v: a.w * sim, a, sim };
     }
     s /= norm;
+    const pl = playedInfo.get(c.id) || null;
+    const recentDays = pl ? (Date.now() - new Date(pl.last)) / 864e5 : Infinity;
+    if (recentDays < 60) s -= 0.15; // just played: give other courses a chance
+    else if (pl && pl.stars >= 4) s += 0.05;
     const tags = c.tags || [];
     s += 0.04 * (tags.includes('TopGlobal') + tags.includes('MostPopular') + tags.includes('Featured'));
     const traits = Object.keys(f).filter((k) => k[0] !== '_' && f[k] > 0 && LABEL[k] && (taste[k] || 0) > 0)
@@ -100,7 +108,7 @@ export function recommend(catalog, played, { limit = 15 } = {}) {
     let reason = '';
     if (best && best.sim > 0.5) reason = `Ligner på ${best.a.name}${best.a.stars ? ` (${best.a.stars} ★)` : ''}`;
     if (traits.length) reason += (reason ? ' · ' : '') + traits.join(', ');
-    return { ...c, score: s, reason };
+    return { ...c, score: s, reason, playedInfo: pl };
   }).sort((a, b) => b.score - a.score);
 
   // diversify: at most 2 per region in the top list unless nothing else is left
