@@ -1,0 +1,28 @@
+{
+  "manifest_version": 3,
+  "name": "My Caddie Sync",
+  "version": "0.1.0",
+  "description": "Henter dine TrackMan-økter og simulatorrunder fra TrackMan Portal og lagrer dem i My Caddie.",
+  "permissions": ["storage", "alarms", "tabs"],
+  "host_permissions": [
+    "https://portal.trackmangolf.com/*",
+    "https://api.trackmangolf.com/*",
+    "https://rhwbvviwdmkkpxqpuams.supabase.co/*"
+  ],
+  "background": { "service_worker": "background.js" },
+  "content_scripts": [
+    {
+      "matches": ["https://portal.trackmangolf.com/*"],
+      "js": ["page_hook.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": ["https://portal.trackmangolf.com/*"],
+      "js": ["bridge.js"],
+      "run_at": "document_start"
+    }
+  ],
+  "action": { "default_popup": "popup.html", "default_title": "My Caddie Sync" },
+  "icons": { "128": "icon128.png" }
+}

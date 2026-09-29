@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="no">
+<head>
+<meta charset="utf-8">
+<title>My Caddie Sync</title>
+<style>
+:root { --bg:#f5f6f3; --panel:#fff; --fg:#1c211d; --muted:#5d665f; --line:#d9ddd6; --accent:#2f6b4f; --ink:#fff; --ok:#2f6b4f; --warn:#9a6a12; --bad:#a3392f; color-scheme: light; }
+@media (prefers-color-scheme: dark) { :root { --bg:#121614; --panel:#1a201c; --fg:#e4e9e4; --muted:#9aa59d; --line:#2c3530; --accent:#6fb38f; --ink:#0f1a14; --ok:#6fb38f; --warn:#e0b35a; --bad:#e27a6e; color-scheme: dark; } }
+* { box-sizing: border-box; }
+body { margin:0; width: 340px; background: var(--bg); color: var(--fg); font: 13.5px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+.wrap { padding: 14px 16px 16px; display: grid; gap: 12px; }
+h1 { margin:0; font-size: 16px; letter-spacing:.01em; }
+.muted { color: var(--muted); font-size: 12.5px; }
+.card { background: var(--panel); border:1px solid var(--line); border-radius: 8px; padding: 10px 12px; display:grid; gap:6px; }
+label { display:grid; gap:3px; font-size:12.5px; color: var(--muted); }
+input[type=email], input[type=password] { font: inherit; padding: 7px 9px; border:1px solid var(--line); border-radius:6px; background: var(--bg); color: var(--fg); }
+.row { display:flex; gap:8px; flex-wrap: wrap; align-items:center; }
+button { font: 600 13px/1 system-ui, sans-serif; padding: 9px 12px; border-radius: 6px; border:1px solid var(--line); background: var(--panel); color: var(--fg); cursor:pointer; }
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--ink); }
+button:disabled { opacity:.5; cursor: default; }
+.kv { display:grid; grid-template-columns: 1fr auto; gap: 2px 10px; font-variant-numeric: tabular-nums; }
+.log { max-height: 150px; overflow:auto; font: 11.5px/1.5 ui-monospace, Menlo, monospace; white-space: pre-wrap; }
+.log .error { color: var(--bad); } .log .warn { color: var(--warn); } .log .ok { color: var(--ok); }
+.err { color: var(--bad); font-size: 12.5px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div><h1>My Caddie Sync</h1><div class="muted">Henter TrackMan-øktene dine til My Caddie</div></div>
+
+  <form class="card" id="loginForm" hidden>
+    <div class="muted">Logg inn med My Caddie-brukeren du opprettet i Supabase.</div>
+    <label for="email">E-post<input id="email" type="email" autocomplete="username" required></label>
+    <label for="password">Passord<input id="password" type="password" autocomplete="current-password" required></label>
+    <div class="row"><button class="primary" id="loginBtn" type="submit">Logg inn</button></div>
+    <div class="err" id="loginErr"></div>
+  </form>
+
+  <div id="main" hidden>
+    <div class="card">
+      <div class="row" style="justify-content:space-between"><span class="muted" id="who"></span><button id="logout">Logg ut</button></div>
+      <div class="kv" id="last"></div>
+    </div>
+    <div class="row" style="margin-top:12px">
+      <button id="preview">Sjekk hva som er nytt</button>
+      <button class="primary" id="sync">Synk nå</button>
+    </div>
+    <label class="row" style="margin-top:10px; color:var(--fg)"><input type="checkbox" id="auto"> Synk automatisk to ganger i døgnet</label>
+    <div class="muted">TrackMan Portal må være innlogget i denne Chrome. Utvidelsen åpner portalen i en bakgrunnsfane ved behov og lukker den etterpå.</div>
+    <div class="card" style="margin-top:10px"><div class="log" id="log"></div></div>
+  </div>
+</div>
+<script src="popup.js"></script>
+</body>
+</html>

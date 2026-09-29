@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="no">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>My Caddie</title>
+  <meta name="theme-color" content="#0f1f17">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="My Caddie">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon-192.png">
+  <link rel="apple-touch-icon" href="icon-192.png">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="top">
+    <h1 id="title">My Caddie</h1>
+    <button id="btn-account" class="icon-btn" aria-label="Konto" hidden>⋯</button>
+  </header>
+  <main id="view" aria-live="polite"></main>
+  <nav class="tabs" id="tabs" hidden>
+    <a href="#/" data-tab="home"><span class="ti">⌂</span>Hjem</a>
+    <a href="#/bag" data-tab="bag"><span class="ti">◫</span>Bag</a>
+    <a href="#/runder" data-tab="runder"><span class="ti">▦</span>Runder</a>
+    <a href="#/baner" data-tab="baner"><span class="ti">★</span>Baner</a>
+    <a href="#/strategi" data-tab="strategi"><span class="ti">⚑</span>Strategi</a>
+  </nav>
+  <div id="toast" class="toast" role="status" hidden></div>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
