@@ -4,10 +4,15 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 
 const TM = "https://api.trackmangolf.com/graphql";
-const Q = `query($skip:Int,$take:Int){ courses(skip:$skip,take:$take){ totalCount items {
-  id displayName courseIdentifier courseLocation difficulty numbersOfHoles tags description
+const FIELDS = `id displayName courseIdentifier courseLocation difficulty numbersOfHoles tags description
   worldLocation { latitude longitude } image { url }
-  tees { name par courseDistance gender slope courseRating kind } } } }`;
+  tees { name par courseDistance gender slope courseRating kind }`;
+const DATES = `createdAt availableFromDate lastUpdatedAt version`;
+const q = (withDates: boolean) => `query($skip:Int,$take:Int){ courses(skip:$skip,take:$take){ totalCount items { ${FIELDS} ${withDates ? DATES : ""} } } }`;
+async function page(skip: number, withDates: boolean) {
+  const r = await fetch(TM, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ query: q(withDates), variables: { skip, take: 100 } }) });
+  return await r.json();
+}
 
 const cors = {
   "Access-Control-Allow-Origin": "*",
@@ -36,21 +41,17 @@ Deno.serve(async (req) => {
     const { data: u } = await admin.auth.getUser(jwt);
     if (!u?.user) return new Response(JSON.stringify({ error: "not signed in" }), { status: 401, headers: cors });
     const rows: Record<string, unknown>[] = [];
-    let skip = 0, total = Infinity;
+    let skip = 0, total = Infinity, withDates = true;
     while (skip < total) {
-      const r = await fetch(TM, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ query: Q, variables: { skip, take: 100 } }),
-      });
-      const j = await r.json();
+      let j = await page(skip, withDates);
+      if (j.errors && withDates) { withDates = false; j = await page(skip, false); } // older API without date fields
       if (j.errors) throw new Error(JSON.stringify(j.errors).slice(0, 300));
       const seg = j.data.courses;
       total = seg.totalCount;
       for (const c of seg.items) {
         const t = mainTee(c.tees);
         const tags: string[] = (c.tags || []).filter((x: string) => x !== "Marketing" && x !== "Course");
-        rows.push({
+        const row: Record<string, unknown> = {
           id: c.id,
           identifier: c.courseIdentifier,
           name: (c.displayName || "").replace(/[‎‏]/g, "").trim(),
@@ -69,14 +70,16 @@ Deno.serve(async (req) => {
           image_url: Array.isArray(c.image) ? c.image[0]?.url ?? null : c.image?.url ?? null,
           fictional: c.courseLocation === "Fictional Course",
           updated_at: new Date().toISOString(),
-        });
+        };
+        if (withDates) Object.assign(row, { tm_created_at: c.createdAt ?? null, available_from: c.availableFromDate ?? null, tm_updated_at: c.lastUpdatedAt ?? null, version: c.version ?? null });
+        rows.push(row);
       }
       skip += 100;
       if (!seg.items.length) break;
     }
     const { error } = await admin.from("tm_courses").upsert(rows, { onConflict: "id" });
     if (error) throw error;
-    return new Response(JSON.stringify({ courses: rows.length }), { headers: { ...cors, "content-type": "application/json" } });
+    return new Response(JSON.stringify({ courses: rows.length, dates: withDates }), { headers: { ...cors, "content-type": "application/json" } });
   } catch (e) {
     return new Response(JSON.stringify({ error: String(e?.message || e) }), { status: 500, headers: { ...cors, "content-type": "application/json" } });
   }

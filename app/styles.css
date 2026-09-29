@@ -220,3 +220,85 @@ table.t th { color: var(--muted); font-weight: 600; font-size: 12px; }
 table.t th:first-child, table.t td:first-child { text-align: left; }
 .login-hero { text-align: center; padding: 30px 0 6px; }
 .login-hero img { width: 120px; height: 120px; border-radius: 28px; box-shadow: 0 8px 24px rgba(0,0,0,.25); }
+
+/* ================================================================
+   Club-crest theme: emerald, gold and serif – matches the logo
+   ================================================================ */
+:root {
+  --bg: #f4f1e7; --card: #fffdf8; --line: #e5dcc6; --ink: #13241b; --muted: #5f6b60;
+  --accent: #155e3d; --accent-2: #0b3a26; --accent-soft: #e6efe5;
+  --gold-1: #f8e3a0; --gold-2: #d9a93a; --gold-3: #a8781a; --gold-ink: #7a560f;
+  --gold-grad: linear-gradient(180deg, #fff1b8 0%, #f2c94c 38%, #c8911a 72%, #f6d77a 100%);
+  --gold-line: linear-gradient(90deg, transparent, #d9a93a 20%, #f8e3a0 50%, #d9a93a 80%, transparent);
+  --serif: Georgia, "Iowan Old Style", "Palatino Linotype", "Times New Roman", serif;
+  --hero-1: #062116; --hero-2: #15724a;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0a130e; --card: #121e17; --line: #2a3a2f; --ink: #eef3ec; --muted: #a5b5a8;
+    --accent: #4cc38a; --accent-soft: #173226; --gold-ink: #f2c94c;
+  }
+}
+:root[data-theme="dark"] { --bg: #0a130e; --card: #121e17; --line: #2a3a2f; --ink: #eef3ec; --muted: #a5b5a8; --accent: #4cc38a; --accent-soft: #173226; --gold-ink: #f2c94c; }
+
+/* header */
+.top { background: radial-gradient(120% 140% at 0% 0%, rgba(255,255,255,.10), transparent 55%),
+  repeating-linear-gradient(100deg, rgba(255,255,255,.04) 0 38px, transparent 38px 76px), linear-gradient(120deg, #062116, #0f5236 60%, #15724a); }
+.top::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: var(--gold-line); opacity: .9; }
+.top h1 { font-family: var(--serif); font-weight: 700; letter-spacing: .06em; font-size: 20px;
+  background: var(--gold-grad); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.icon-btn { background: rgba(242,201,76,.14); color: #f8e3a0; border: 1px solid rgba(242,201,76,.35); }
+
+/* headings */
+h2 { font-family: var(--serif); font-weight: 700; letter-spacing: .01em; }
+h2::after { content: ""; display: block; width: 44px; height: 2px; margin-top: 6px; border-radius: 2px; background: linear-gradient(90deg, var(--gold-3), var(--gold-1)); }
+h2 .small { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, system-ui, sans-serif; }
+h3, .card h3 { font-family: var(--serif); font-weight: 700; }
+h2.month { margin-top: 26px; }
+
+/* cards: a gold hairline on top */
+.card { position: relative; overflow: hidden; }
+.card::before { content: ""; position: absolute; left: 18px; right: 18px; top: 0; height: 1px; background: var(--gold-line); opacity: .7; }
+.card.accent { background: linear-gradient(180deg, var(--accent-soft), var(--card)); border-color: color-mix(in srgb, var(--gold-2) 45%, var(--line)); }
+
+/* hero: gold frame + crest watermark */
+.hero { border: 1px solid rgba(242,201,76,.55); box-shadow: 0 10px 30px rgba(6,33,22,.25), inset 0 0 0 1px rgba(255,255,255,.06); }
+.hero::after { content: ""; position: absolute; right: -40px; top: -30px; width: 210px; height: 210px; background: url(logo.svg) center/contain no-repeat; opacity: .10; pointer-events: none; }
+.hero .eyebrow { color: #f8e3a0; opacity: 1; letter-spacing: .14em; }
+.hero .big { font-family: var(--serif); background: var(--gold-grad); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.hero .hero-stats b { font-family: var(--serif); }
+
+/* numbers in serif gold where they are the headline */
+.review-hero .count, .kpi .v, .ring-v { font-family: var(--serif); }
+.review-hero .count { color: var(--gold-ink); }
+.ring-fg { stroke: url(#ringGold); stroke: var(--gold-2); }
+.ring-bg { stroke: color-mix(in srgb, var(--gold-2) 18%, var(--line)); }
+
+/* controls */
+.seg { background: color-mix(in srgb, var(--accent) 8%, var(--card)); border: 1px solid var(--line); }
+.seg button.on { background: linear-gradient(135deg, #0b3a26, #15724a); color: #f8e3a0; box-shadow: 0 1px 4px rgba(6,33,22,.35); }
+.btn.primary { background: linear-gradient(135deg, #0b3a26, #15724a); border: 1px solid var(--gold-2); color: #fff4cf; }
+.btn { border-radius: 12px; }
+.chip { background: color-mix(in srgb, var(--gold-2) 18%, var(--card)); color: var(--gold-ink); }
+input[type=search], input[type=text], input[type=email], input[type=password], input[type=number], select { background: var(--card); }
+input:focus, select:focus { outline: 2px solid var(--gold-2); outline-offset: 1px; }
+
+/* bottom navigation: emerald with gold active state */
+.tabs { background: linear-gradient(180deg, #0b3a26, #062116); border-top: 0; box-shadow: 0 -6px 20px rgba(6,33,22,.25); }
+.tabs::before { content: ""; position: absolute; left: 0; right: 0; top: 0; height: 2px; background: var(--gold-line); }
+.tabs a { color: rgba(238,243,236,.72); position: relative; }
+.tabs a.on { color: #f2c94c; }
+.tabs a.on::after { content: ""; position: absolute; top: 2px; left: 30%; right: 30%; height: 3px; border-radius: 0 0 3px 3px; background: var(--gold-grad); }
+
+/* course cards and badges */
+.ccard { border-color: color-mix(in srgb, var(--gold-2) 30%, var(--line)); }
+.ccard .t { font-family: var(--serif); font-size: 17px; }
+.ccard .img::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: var(--gold-line); }
+.pbadge.new { background: var(--gold-grad); color: #3d2b04; box-shadow: 0 1px 4px rgba(0,0,0,.25); }
+.score-badge { font-family: var(--serif); }
+.thumb { border: 1px solid color-mix(in srgb, var(--gold-2) 40%, transparent); }
+.tip-card .club-badge { border: 2px solid var(--gold-2); font-family: var(--serif); }
+.hole-nav button.on { background: linear-gradient(135deg, #0b3a26, #15724a); color: #f8e3a0; border-color: var(--gold-2); }
+.gap-p50::before { background: var(--gold-3); }
+.stars button.on, .stars.ro span { color: var(--gold-2); }
+.login-hero img { border: 2px solid var(--gold-2); }

@@ -95,7 +95,7 @@ function wireDist(root, id, rerender) { const el = root.querySelector('#' + id);
 const getClubs = () => cached('clubs', () => q(sb.from('clubs').select('id,name,category,sort_order,loft_deg').order('sort_order')), 60 * 60e3);
 const getOverview = () => cached('courses:overview', () => q(sb.rpc('course_overview')));
 const getCatalog = () => cached('courses:catalog', () => q(sb.from('tm_courses')
-  .select('id,name,name_key,location,lat,lon,difficulty,holes,tags,description,par,length_m,slope,course_rating,fictional,image_url,updated_at')
+  .select('id,name,name_key,location,lat,lon,difficulty,holes,tags,description,par,length_m,slope,course_rating,fictional,image_url,updated_at,tm_created_at,available_from')
   .limit(2000)), 30 * 60e3);
 export const getProfile = (from, to, acts) => cached(`profile:${from}:${to}:${acts}`, () =>
   q(sb.rpc('club_profile', { p_from: from, p_to: to, p_activities: acts.split(',') })));
@@ -276,11 +276,14 @@ async function renderRounds() {
 }
 
 // ---------------------------------------------------------------- courses
-const courseState = { tab: 'rec', search: '' };
+const courseState = { tab: 'rec', search: '', newLimit: 40 };
+let triedDates = false;
 async function ensureCatalog(force = false) {
   const cat = await getCatalog();
   const newest = cat.reduce((m, c) => (c.updated_at > m ? c.updated_at : m), '');
-  if (!force && cat.length > 100 && newest && Date.now() - new Date(newest) < 14 * 864e5) return cat;
+  const hasDates = cat.some((c) => c.tm_created_at || c.available_from);
+  const needDates = !hasDates && !triedDates; triedDates = true;
+  if (!force && !needDates && cat.length > 100 && newest && Date.now() - new Date(newest) < 14 * 864e5) return cat;
   const { data, error } = await sb.functions.invoke('tm-courses', { body: {} });
   if (error) { console.warn(error); if (cat.length) return cat; throw new Error('Fikk ikke hentet banelisten fra TrackMan'); }
   invalidate('courses:catalog');
@@ -291,13 +294,14 @@ async function renderCourses() {
   $title.textContent = 'Baner';
   $view.innerHTML = `<div class="row"><div class="seg" id="ct">
       <button data-k="rec" class="${courseState.tab === 'rec' ? 'on' : ''}">Anbefalt for deg</button>
+      <button data-k="new" class="${courseState.tab === 'new' ? 'on' : ''}">Nyeste</button>
       <button data-k="played" class="${courseState.tab === 'played' ? 'on' : ''}">Spilt</button></div></div>
     <div id="cbody"><div class="loading">Laster…</div></div>`;
   $view.querySelector('#ct').onclick = (e) => { const k = e.target.dataset.k; if (k) { courseState.tab = k; renderCourses(); } };
   const body = $view.querySelector('#cbody');
   const overview = await getOverview();
   let catalog = [];
-  try { catalog = await ensureCatalog(); } catch (e) { if (courseState.tab === 'rec') { body.innerHTML = `<div class="card warn">${esc(e.message)}</div>`; return; } }
+  try { catalog = await ensureCatalog(); } catch (e) { if (courseState.tab !== 'played') { body.innerHTML = `<div class="card warn">${esc(e.message)}</div>`; return; } }
   const byId = new Map(catalog.map((c) => [c.id, c])); const byKey = new Map(catalog.map((c) => [c.name_key, c]));
 
   if (courseState.tab === 'played') {
@@ -320,6 +324,36 @@ async function renderCourses() {
     return;
   }
 
+  const withPlayed = (c) => { const o = overview.find((x) => x.kind === 'simulator' && (x.tm_course_id === c.id || nameKey(x.course_name) === c.name_key));
+    return { ...c, playedInfo: o ? { rounds: o.rounds, last: o.last_played, stars: o.stars } : null }; };
+  const addedAt = (c) => c.available_from || c.tm_created_at || null;
+  const baseCard = (c, extra = '') => `<div class="ccard"><div class="img" style="${imgStyle(c.image_url)}">${extra}
+      ${playedBadge(c)}
+      ${(c.tags || []).includes('Links') ? '<span class="tag">Links</span>' : (c.tags || []).includes('TourVenue') ? '<span class="tag">Tour</span>' : ''}</div>
+      <div class="body"><div class="t">${esc(c.name)}</div>
+      <div class="m">${esc(c.location || '')}</div>
+      <div class="m">${c.par ? 'Par ' + c.par : ''}${c.length_m ? ' · ' + fmt(c.length_m) + ' m' : ''} ${diffBar(c.difficulty)}</div>
+      ${c.reason ? `<div class="why">${esc(c.reason)}</div>` : ''}</div></div>`;
+
+  if (courseState.tab === 'new') {
+    const dated = catalog.filter((c) => addedAt(c)).map(withPlayed).sort((a, b) => addedAt(b).localeCompare(addedAt(a)));
+    if (!dated.length) { body.innerHTML = `<div class="card warn">TrackMan oppgir ikke når banene ble lagt til akkurat nå. Prøv «Oppdater baneliste» senere.</div>`; return; }
+    const shown = dated.slice(0, courseState.newLimit);
+    let h = `<p class="small muted" style="margin-top:12px">Sortert etter når banen kom i TrackMan, nyeste først. ${dated.filter((c) => !c.playedInfo).length} av ${dated.length} har du ikke spilt.</p>`;
+    let month = '';
+    for (const c of shown) {
+      const d = new Date(addedAt(c));
+      const m = d.toLocaleDateString('nb-NO', { month: 'long', year: 'numeric' });
+      if (m !== month) { if (month) h += `</div>`; h += `<h2 class="month">${m.charAt(0).toUpperCase() + m.slice(1)}</h2><div class="ccards">`; month = m; }
+      h += baseCard(c, `<span class="match">Ny ${d.toLocaleDateString('nb-NO', { day: 'numeric', month: 'short' })}</span>`);
+    }
+    h += `</div>`;
+    if (dated.length > shown.length) h += `<div class="row" style="justify-content:center;margin:16px 0"><button class="btn" id="more">Vis flere (${dated.length - shown.length} igjen)</button></div>`;
+    body.innerHTML = h;
+    const more = body.querySelector('#more'); if (more) more.onclick = () => { courseState.newLimit += 40; renderCourses(); };
+    return;
+  }
+
   const ratings = overview.filter((c) => c.kind === 'simulator' && c.stars);
   const res = recommend(catalog, overview.filter((c) => c.kind === 'simulator'), { limit: 12 });
   let h = '';
@@ -336,20 +370,11 @@ async function renderCourses() {
 
   const clist = body.querySelector('#clist');
   const maxScore = Math.max(0.0001, ...res.picks.map((c) => c.score));
-  const card = (c, i, showMatch) => `<div class="ccard"><div class="img" style="${imgStyle(c.image_url)}">
-      ${showMatch ? `<span class="match">${Math.round(Math.max(0.35, c.score / maxScore) * 100)} % match</span>` : ''}
-      ${playedBadge(c)}
-      ${(c.tags || []).includes('Links') ? '<span class="tag">Links</span>' : (c.tags || []).includes('TourVenue') ? '<span class="tag">Tour</span>' : ''}</div>
-      <div class="body"><div class="t">${esc(c.name)}</div>
-      <div class="m">${esc(c.location || '')}</div>
-      <div class="m">${c.par ? 'Par ' + c.par : ''}${c.length_m ? ' · ' + fmt(c.length_m) + ' m' : ''} ${diffBar(c.difficulty)}</div>
-      ${c.reason ? `<div class="why">${esc(c.reason)}</div>` : ''}</div></div>`;
+  const card = (c, i, showMatch) => baseCard(c, showMatch ? `<span class="match">${Math.round(Math.max(0.35, c.score / maxScore) * 100)} % match</span>` : '');
   const draw = () => {
     const s = courseState.search.trim().toLowerCase();
     if (s) {
-      const hits = catalog.filter((c) => (c.name + ' ' + (c.location || '')).toLowerCase().includes(s)).slice(0, 24)
-        .map((c) => { const o = overview.find((x) => x.kind === 'simulator' && (x.tm_course_id === c.id || nameKey(x.course_name) === c.name_key));
-          return { ...c, playedInfo: o ? { rounds: o.rounds, last: o.last_played, stars: o.stars } : null }; });
+      const hits = catalog.filter((c) => (c.name + ' ' + (c.location || '')).toLowerCase().includes(s)).slice(0, 24).map(withPlayed);
       clist.innerHTML = `<h2>Søk</h2>${hits.length ? `<div class="ccards">${hits.map((c, i) => card(c, i, false)).join('')}</div>` : '<div class="empty">Ingen treff</div>'}`;
     } else {
       clist.innerHTML = `<h2>Baner du trolig vil like</h2><div class="ccards">${res.picks.map((c, i) => card(c, i, true)).join('')}</div>`;
