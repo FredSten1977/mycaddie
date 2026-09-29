@@ -1,20 +1,19 @@
-My Caddie Sync – installasjon (én gang)
+My Caddie Sync – installasjon (én gang, ca. 2 minutter)
 
 1. Pakk ut denne zip-filen til en fast mappe, for eksempel Dokumenter/my-caddie-sync.
-   Ikke legg den i mycaddie-script-mappen (clasp ville prøvd å laste den opp til Apps Script).
+   Mappen må bli liggende; Chrome leser utvidelsen derfra.
 2. Åpne Chrome og gå til chrome://extensions
 3. Slå på «Utviklermodus» (øverst til høyre).
 4. Klikk «Last inn upakket» og velg mappen fra punkt 1.
 5. Fest utvidelsen: puslespill-ikonet i verktøylinjen → nål ved «My Caddie Sync».
 
 Bruk
-- Klikk på ikonet og logg inn med My Caddie-brukeren (e-post og passord du valgte i Supabase).
-- Sørg for at du er innlogget i TrackMan Portal i Chrome (portal.trackmangolf.com).
-- «Sjekk hva som er nytt» teller aktivitetene i TrackMan uten å lagre noe.
+- Klikk på ikonet og logg inn med My Caddie-brukeren din (samme e-post og passord som i appen).
+- Vær innlogget i TrackMan Portal i Chrome (portal.trackmangolf.com).
 - «Synk nå» henter alle nye økter og runder. Første gang tar det noen minutter.
 - «Synk automatisk» kjører to ganger i døgnet mens Chrome er åpen.
 
 Hva utvidelsen gjør
-- Leser bare (ingen endringer i TrackMan-kontoen).
+- Leser bare (ingen endringer i TrackMan-kontoen din).
 - TrackMan-innloggingen blir i portalfanen og sendes ingen steder.
-- Dataene går direkte til din egen database i Supabase.
+- Dataene lagres i My Caddie under din egen bruker. Ingen andre brukere kan se dem.

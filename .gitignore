@@ -2,3 +2,4 @@ node_modules/
 .DS_Store
 *.zip
 .docs-tmp/
+!app/my-caddie-sync.zip

@@ -4,7 +4,11 @@ import { recommend } from './recommend.js';
 import { renderStrategy } from './strategy.js';
 import { trendChart, ring, gappingChart, dispersionField, CAT, CAT_LABEL, catVar, hideTip } from './charts.js';
 
-export const sb = createClient(SUPABASE_URL, SUPABASE_KEY, { auth: { persistSession: true, autoRefreshToken: true } });
+// Links from invitation and password e-mails land here with #access_token=…&type=invite|recovery
+const AUTH_HASH = location.hash;
+let needPassword = /type=(invite|recovery|signup)/.test(AUTH_HASH);
+const authError = /error_description=([^&]+)/.exec(AUTH_HASH);
+export const sb = createClient(SUPABASE_URL, SUPABASE_KEY, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
 
 const $view = document.getElementById('view');
 const $tabs = document.getElementById('tabs');
@@ -119,18 +123,52 @@ async function renderLogin() {
     <div class="login-hero">${document.querySelector('.logo').outerHTML.replace('class="logo"', '')}</div>
     <div class="card">
       <h2 style="margin-top:0">Logg inn</h2>
-      <p class="muted small">Bruk den samme My Caddie-brukeren som i Chrome-utvidelsen.</p>
+      <p class="muted small">Bruk den samme My Caddie-brukeren som i Chrome-utvidelsen. Ny bruker? Du får en invitasjon på e-post.</p>
+      ${authError ? `<div class="card warn small">Lenken virket ikke (${esc(decodeURIComponent(authError[1].replace(/\+/g, ' ')))}). Be om en ny, eller bruk «Glemt passord».</div>` : ''}
       <form id="login">
         <label for="em">E-post</label><input id="em" type="email" autocomplete="username" required>
         <label for="pw">Passord</label><input id="pw" type="password" autocomplete="current-password" required>
-        <div class="row" style="margin-top:16px"><button class="btn primary" type="submit">Logg inn</button><span id="lerr" class="small" style="color:var(--bad)"></span></div>
+        <div class="row" style="margin-top:16px"><button class="btn primary" type="submit">Logg inn</button><button class="btn ghost sm" type="button" id="forgot">Glemt passord?</button></div>
+        <div id="lerr" class="small" style="color:var(--bad);margin-top:8px"></div>
       </form>
     </div>`;
+  document.getElementById('forgot').onclick = async () => {
+    const email = em.value.trim();
+    if (!email) { document.getElementById('lerr').textContent = 'Skriv inn e-posten din først.'; return; }
+    const { error } = await sb.auth.resetPasswordForEmail(email, { redirectTo: location.origin + location.pathname });
+    document.getElementById('lerr').style.color = error ? 'var(--bad)' : 'var(--accent)';
+    document.getElementById('lerr').textContent = error ? 'Kunne ikke sende e-post: ' + error.message : 'Sjekk e-posten din for en lenke til å velge nytt passord.';
+  };
   document.getElementById('login').addEventListener('submit', async (e) => {
     e.preventDefault();
     const { error } = await sb.auth.signInWithPassword({ email: em.value.trim(), password: pw.value });
     if (error) { document.getElementById('lerr').textContent = 'Feil e-post eller passord.'; return; }
     route();
+  });
+}
+
+async function renderSetPassword() {
+  $tabs.hidden = true; $title.textContent = 'My Caddie';
+  const { data } = await sb.auth.getUser();
+  $view.innerHTML = `
+    <div class="login-hero">${document.querySelector('.logo').outerHTML.replace('class="logo"', '')}</div>
+    <div class="card"><h2 style="margin-top:0">Velg passord</h2>
+      <p class="muted small">For ${esc(data.user?.email || '')}. Du bruker det samme passordet i appen og i Chrome-utvidelsen.</p>
+      <form id="setpw">
+        <label for="p1">Nytt passord (minst 8 tegn)</label><input id="p1" type="password" autocomplete="new-password" minlength="8" required>
+        <label for="p2">Gjenta passordet</label><input id="p2" type="password" autocomplete="new-password" minlength="8" required>
+        <div class="row" style="margin-top:16px"><button class="btn primary" type="submit">Lagre passord</button></div>
+        <div id="perr" class="small" style="color:var(--bad);margin-top:8px"></div>
+      </form></div>`;
+  document.getElementById('setpw').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const a = p1.value, b = p2.value;
+    if (a.length < 8) { perr.textContent = 'Passordet må ha minst 8 tegn.'; return; }
+    if (a !== b) { perr.textContent = 'Passordene er ikke like.'; return; }
+    const { error } = await sb.auth.updateUser({ password: a });
+    if (error) { perr.textContent = 'Kunne ikke lagre: ' + error.message; return; }
+    needPassword = false; toast('Passordet er lagret. Velkommen!');
+    history.replaceState(null, '', location.pathname + '#/'); route();
   });
 }
 
@@ -155,13 +193,23 @@ async function renderHome() {
   const best = trendRounds.reduce((m, r) => (r.par && (m === null || r.strokes - r.par < m) ? r.strokes - r.par : m), null);
 
   let h = '';
+  if (!last && !profile.length) h += `<section class="hero" style="padding-bottom:16px"><div class="eyebrow">Velkommen</div>
+      <div style="font-family:var(--serif);font-size:24px;font-weight:700;margin:4px 0 6px">Kom i gang med My Caddie</div>
+      <div class="sub">Appen fylles av seg selv fra TrackMan når utvidelsen er installert.</div></section>
+    <div class="card"><ol style="margin:0;padding-left:20px;line-height:1.6">
+      <li><a href="my-caddie-sync.zip" download>Last ned My Caddie Sync</a> (Chrome-utvidelse) og pakk ut zip-filen til en fast mappe.</li>
+      <li>I Chrome: gå til <b>chrome://extensions</b>, slå på <b>Utviklermodus</b>, klikk <b>Last inn upakket</b> og velg mappen.</li>
+      <li>Klikk på utvidelsen og logg inn med samme e-post og passord som her.</li>
+      <li>Vær innlogget i <a href="https://portal.trackmangolf.com" target="_blank" rel="noopener">TrackMan Portal</a> i Chrome, og trykk <b>Synk nå</b>. Første gang tar det noen minutter.</li>
+      <li>Gå til <a href="#/bag">Min bag</a> og kryss av hvilke køller du har.</li>
+    </ol></div>`;
   if (sim18) h += `<section class="hero">
       <div class="eyebrow">Simulator · 18 hull</div>
       <div class="big">${signed(+sim18.last5_to_par_avg)}</div>
       <div class="sub">snitt mot par siste 5 runder</div>
       <div class="hero-stats"><div><b>${signed(+sim18.to_par_avg)}</b>snitt 12 mnd</div><div><b>${best === null ? '–' : signed(best, 0)}</b>beste siste 30</div><div><b>${sim18.rounds}</b>runder</div></div>
       <div class="spark" id="spark"></div></section>`;
-  if (ageDays > 7) h += `<div class="card warn"><b>TrackMan-synken har ikke gått på ${last ? Math.floor(ageDays) + ' dager' : 'lenge'}.</b>
+  if (ageDays > 7 && last) h += `<div class="card warn"><b>TrackMan-synken har ikke gått på ${last ? Math.floor(ageDays) + ' dager' : 'lenge'}.</b>
     <div class="small">Åpne Chrome med My Caddie Sync, eller trykk «Synk nå» i utvidelsen.</div></div>`;
   if (nReview > 0) h += `<a class="card link accent" href="#/sjekk"><div class="review-hero"><div class="count">${fmt(nReview)}</div>
     <div style="flex:1"><b>slag passer ikke med valgt kølle</b><div class="small muted">Trolig glemt å bytte kølle i simulatoren. Bekreft med ett trykk.</div></div><span style="font-size:22px">›</span></div></a>`;
@@ -233,11 +281,32 @@ async function renderBag() {
       tableRows.map((r) => `<tr><td>${esc(r.club)}</td><td>${fmt(r.carry_p20)}</td><td><b>${fmt(r.carry_p50)}</b></td><td>${fmt(r.carry_p80)}</td>
         <td>${fmt(r.total_p20)}</td><td><b>${fmt(r.total_p50)}</b></td><td>${fmt(r.total_p80)}</td><td>±${fmt(mode === 'total' ? r.total_side_abs_p80 : r.side_abs_p80)}</td><td>${fmt(r.mishit_pct, 1)} %</td><td>${fmt(r.full_shots)}</td></tr>`).join('') +
       `</tbody></table></div></details>
-    <label class="row small"><input type="checkbox" id="all" ${bagState.showAll ? 'checked' : ''}> Vis også køller som ikke er i bagen</label>`;
+    <label class="row small"><input type="checkbox" id="all" ${bagState.showAll ? 'checked' : ''}> Vis også køller som ikke er i bagen</label>
+    <details class="card" id="bagedit"><summary>Hvilke køller har du i bagen?</summary><div id="bagform" class="small muted" style="margin-top:8px">Laster…</div></details>`;
   wireDist(body, 'dm', renderBag);
   gappingChart(body.querySelector('#gap'), shown);
   dispersionField(body.querySelector('#disp'), shown.filter((r) => r.side_abs_p80));
   body.querySelector('#all').onchange = (e) => { bagState.showAll = e.target.checked; renderBag(); };
+  body.querySelector('#bagedit').addEventListener('toggle', async (e) => { if (e.target.open) await renderBagEditor(body.querySelector('#bagform'), rows); }, { once: true });
+}
+
+// Tick the clubs in the bag; saved as a new period from today (the history is kept)
+async function renderBagEditor(el, rows) {
+  const clubs = (await getClubs()).filter((c) => c.category !== 'putter');
+  const used = new Map(rows.map((r) => [r.club, r]));
+  const list = clubs.filter((c) => used.has(c.name)).concat(clubs.filter((c) => !used.has(c.name)));
+  el.classList.remove('muted');
+  el.innerHTML = `<p class="muted" style="margin-top:0">Kryss av køllene du har nå. Endringen gjelder fra i dag, tidligere perioder beholdes.</p>
+    <div style="columns:2;column-gap:16px">${list.map((c) => { const r = used.get(c.name);
+      return `<label style="display:flex;gap:8px;align-items:center;margin:4px 0;color:var(--ink);break-inside:avoid"><input type="checkbox" value="${c.id}" ${r?.in_bag ? 'checked' : ''}>
+        <span class="sw" style="background:${catVar(c.category)}"></span>${esc(c.name)}${r ? ` <span class="muted">(${fmt(r.full_shots)})</span>` : ''}</label>`; }).join('')}</div>
+    <div class="row" style="margin-top:12px"><button class="btn primary sm" id="savebag">Lagre bagen</button></div>`;
+  el.querySelector('#savebag').onclick = async () => {
+    const ids = [...el.querySelectorAll('input[type=checkbox]:checked')].map((x) => x.value);
+    if (ids.length > 14) { toast(`Du har valgt ${ids.length} køller. Regelen er maks 14, men jeg lagrer likevel.`); }
+    try { await q(sb.rpc('set_bag', { p_in_bag: ids })); invalidate('profile:'); invalidate('review:'); toast('Bagen er lagret'); renderBag(); }
+    catch (e) { toast('Kunne ikke lagre: ' + e.message); }
+  };
 }
 
 // ---------------------------------------------------------------- rounds
@@ -476,6 +545,8 @@ async function route() {
   hideTip();
   const { data: { session } } = await sb.auth.getSession();
   if (!session) return renderLogin();
+  if (needPassword) return renderSetPassword();
+  if (/access_token=|error=/.test(location.hash)) history.replaceState(null, '', location.pathname + '#/');
   await flushReclassify();
   if (my !== routing) return;
   $tabs.hidden = false; document.getElementById('btn-account').hidden = false;
