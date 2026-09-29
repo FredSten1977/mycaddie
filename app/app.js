@@ -79,6 +79,19 @@ function scoreBadge(strokes, par) {
 }
 
 // ---------------------------------------------------------------- data
+// Carry or total: one switch for the whole app, remembered on this phone
+const DIST_KEY = 'mc_dist_mode';
+function distMode() { try { return localStorage.getItem(DIST_KEY) === 'total' ? 'total' : 'carry'; } catch { return 'carry'; } }
+function setDistMode(m) { try { localStorage.setItem(DIST_KEY, m); } catch { /* private mode */ } }
+// Rows with carry_* fields swapped for total_* when total is selected, so every chart can read the same fields
+function asMode(rows, mode = distMode()) {
+  if (mode !== 'total') return rows;
+  return rows.filter((r) => r.total_p50).map((r) => ({ ...r, carry_p20: r.total_p20 ?? r.total_p50, carry_p50: r.total_p50, carry_p80: r.total_p80 ?? r.total_p50,
+    carry_p90: r.total_p90 ?? r.total_p80, side_mean: r.total_side_mean ?? r.side_mean, side_abs_p80: r.total_side_abs_p80 ?? r.side_abs_p80 }));
+}
+const distSwitch = (id) => `<div class="seg" id="${id}">${[['carry', 'Carry'], ['total', 'Total']].map(([k, l]) => `<button data-m="${k}" class="${distMode() === k ? 'on' : ''}">${l}</button>`).join('')}</div>`;
+function wireDist(root, id, rerender) { const el = root.querySelector('#' + id); if (el) el.onclick = (e) => { const m = e.target.dataset.m; if (m && m !== distMode()) { setDistMode(m); rerender(); } }; }
+
 const getClubs = () => cached('clubs', () => q(sb.from('clubs').select('id,name,category,sort_order,loft_deg').order('sort_order')), 60 * 60e3);
 const getOverview = () => cached('courses:overview', () => q(sb.rpc('course_overview')));
 const getCatalog = () => cached('courses:catalog', () => q(sb.from('tm_courses')
@@ -164,10 +177,10 @@ async function renderHome() {
        ${starsHtml(0, { interactive: true, kind: c.kind, course: cleanName(c.course_name), tm: c.tm_course_id || '' })}</div></div></li>`;
     }).join('') + `</ul></div>`;
   }
-  const bag = profile.filter((r) => r.in_bag && r.category !== 'putter' && r.carry_p50);
+  const bag = asMode(profile.filter((r) => r.in_bag && r.category !== 'putter' && r.carry_p50));
   if (bag.length) {
     const max = Math.max(...bag.map((r) => +r.carry_p50));
-    h += `<a class="card link" href="#/bag"><div class="row"><h3 style="margin:0">Min bag</h3><span class="spacer"></span><span class="small muted">forventet carry ›</span></div>
+    h += `<a class="card link" href="#/bag"><div class="row"><h3 style="margin:0">Min bag</h3><span class="spacer"></span><span class="small muted">forventet ${distMode()} ›</span></div>
       <div style="display:flex;align-items:flex-end;gap:4px;height:110px;margin-top:10px">${bag.map((r) => `<div title="${esc(r.club)} ${fmt(r.carry_p50)} m" style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%">
         <div class="num" style="font-size:10px;font-weight:700">${fmt(r.carry_p50)}</div>
         <div style="width:100%;max-width:26px;height:${(r.carry_p50 / max) * 80}%;background:${catVar(r.category)};border-radius:4px 4px 0 0"></div>
@@ -202,24 +215,27 @@ async function renderBag() {
   $view.querySelector('#src').onclick = (e) => { const k = e.target.dataset.k; if (k) { bagState.src = k; renderBag(); } };
 
   const rows = await getProfile(periods[bagState.period][0], today(), srcs[bagState.src][0]);
-  const shown = rows.filter((r) => (bagState.showAll || r.in_bag) && r.category !== 'putter' && r.carry_p50);
+  const mode = distMode();
+  const shown = asMode(rows.filter((r) => (bagState.showAll || r.in_bag) && r.category !== 'putter' && r.carry_p50), mode);
   const body = $view.querySelector('#bagbody');
   if (!shown.length) { body.innerHTML = `<div class="empty">Ingen fullslag i denne perioden.</div>`; return; }
+  const tableRows = rows.filter((r) => (bagState.showAll || r.in_bag) && r.category !== 'putter' && r.carry_p50);
   const cats = [...new Set(shown.map((r) => CAT[r.category] || 'iron'))];
   const legend = `<div class="legend">${cats.map((c) => `<span><i style="background:var(--c-${c})"></i>${CAT_LABEL[c]}</span>`).join('')}</div>`;
   body.innerHTML = `
-    <div class="card"><div class="row"><h3 style="margin:0">Lengder og hull mellom køllene</h3></div>
-      <div class="small muted" style="margin:4px 0 8px">Feltet går fra trygg (P20) til lang (P80) carry, streken er forventet lengde (P50). Trykk på en kølle for detaljer.</div>
+    <div class="card"><div class="row"><h3 style="margin:0">Lengder og hull mellom køllene</h3><span class="spacer"></span>${distSwitch('dm')}</div>
+      <div class="small muted" style="margin:4px 0 8px">${mode === 'total' ? 'Total lengde (carry + rulle, fra simulatoren)' : 'Carry'}: feltet går fra trygg (P20) til lang (P80), streken er forventet lengde (P50). Trykk på en kølle for detaljer.</div>
       ${legend}<div id="gap"></div></div>
     <div class="card"><h3>Spredning sett ovenfra</h3>
-      <div class="small muted" style="margin-bottom:6px">Hver ellipse rommer 80 % av de gode fullslagene med kølla. Bredden er sideavviket.</div>
+      <div class="small muted" style="margin-bottom:6px">Hver ellipse rommer 80 % av de gode fullslagene med kølla, målt der ballen ${mode === 'total' ? 'stopper' : 'lander'}. Bredden er sideavviket.</div>
       ${legend}<div id="disp"></div></div>
     <details class="card"><summary>Tabell med alle tall</summary><div style="overflow-x:auto"><table class="t"><thead><tr>
-      <th>Kølle</th><th>Trygg</th><th>Forv.</th><th>Lang</th><th>Total</th><th>Side P80</th><th>Feilslag</th><th>n</th></tr></thead><tbody>` +
-      shown.map((r) => `<tr><td>${esc(r.club)}</td><td>${fmt(r.carry_p20)}</td><td><b>${fmt(r.carry_p50)}</b></td><td>${fmt(r.carry_p80)}</td>
-        <td>${fmt(r.total_p50)}</td><td>±${fmt(r.side_abs_p80)}</td><td>${fmt(r.mishit_pct, 1)} %</td><td>${fmt(r.full_shots)}</td></tr>`).join('') +
+      <th>Kølle</th><th>Carry P20</th><th>Carry</th><th>Carry P80</th><th>Total P20</th><th>Total</th><th>Total P80</th><th>Side P80</th><th>Feilslag</th><th>n</th></tr></thead><tbody>` +
+      tableRows.map((r) => `<tr><td>${esc(r.club)}</td><td>${fmt(r.carry_p20)}</td><td><b>${fmt(r.carry_p50)}</b></td><td>${fmt(r.carry_p80)}</td>
+        <td>${fmt(r.total_p20)}</td><td><b>${fmt(r.total_p50)}</b></td><td>${fmt(r.total_p80)}</td><td>±${fmt(mode === 'total' ? r.total_side_abs_p80 : r.side_abs_p80)}</td><td>${fmt(r.mishit_pct, 1)} %</td><td>${fmt(r.full_shots)}</td></tr>`).join('') +
       `</tbody></table></div></details>
     <label class="row small"><input type="checkbox" id="all" ${bagState.showAll ? 'checked' : ''}> Vis også køller som ikke er i bagen</label>`;
+  wireDist(body, 'dm', renderBag);
   gappingChart(body.querySelector('#gap'), shown);
   dispersionField(body.querySelector('#disp'), shown.filter((r) => r.side_abs_p80));
   body.querySelector('#all').onchange = (e) => { bagState.showAll = e.target.checked; renderBag(); };
