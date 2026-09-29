@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>My Caddie</title>
-  <meta name="theme-color" content="#0f1f17">
+  <meta name="theme-color" content="#0d3b26">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="My Caddie">
@@ -16,16 +16,17 @@
 </head>
 <body>
   <header class="top">
+    <svg class="logo" viewBox="0 0 32 32" aria-hidden="true"><circle cx="14" cy="19" r="10" fill="#fff"/><g fill="#cfe3d7"><circle cx="10" cy="16" r="1.3"/><circle cx="14" cy="15" r="1.3"/><circle cx="18" cy="16" r="1.3"/><circle cx="11" cy="20" r="1.3"/><circle cx="15" cy="20" r="1.3"/><circle cx="19" cy="20" r="1.3"/><circle cx="13" cy="24" r="1.3"/><circle cx="17" cy="24" r="1.3"/></g><path d="M22 3v14" stroke="#fff" stroke-width="2" stroke-linecap="round"/><path d="M22 3l8 3-8 3z" fill="#f2c94c"/></svg>
     <h1 id="title">My Caddie</h1>
     <button id="btn-account" class="icon-btn" aria-label="Konto" hidden>⋯</button>
   </header>
   <main id="view" aria-live="polite"></main>
   <nav class="tabs" id="tabs" hidden>
-    <a href="#/" data-tab="home"><span class="ti">⌂</span>Hjem</a>
-    <a href="#/bag" data-tab="bag"><span class="ti">◫</span>Bag</a>
-    <a href="#/runder" data-tab="runder"><span class="ti">▦</span>Runder</a>
-    <a href="#/baner" data-tab="baner"><span class="ti">★</span>Baner</a>
-    <a href="#/strategi" data-tab="strategi"><span class="ti">⚑</span>Strategi</a>
+    <a href="#/" data-tab="home"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"/></svg>Hjem</a>
+    <a href="#/bag" data-tab="bag"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 7h8l1 14H7z"/><path d="M10 7V3M14 7V2M12 7V4"/></svg>Bag</a>
+    <a href="#/runder" data-tab="runder"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19l5-6 4 3 7-9"/><path d="M4 4v16h16"/></svg>Runder</a>
+    <a href="#/baner" data-tab="baner"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 3l2.8 5.7 6.2.9-4.5 4.4 1.1 6.2L12 17.3 6.4 20.2l1.1-6.2L3 9.6l6.2-.9z"/></svg>Baner</a>
+    <a href="#/strategi" data-tab="strategi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 21V3"/><path d="M6 4l11 4-11 4"/><ellipse cx="12" cy="20" rx="8" ry="2"/></svg>Strategi</a>
   </nav>
   <div id="toast" class="toast" role="status" hidden></div>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>

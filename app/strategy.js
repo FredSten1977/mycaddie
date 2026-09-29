@@ -1,3 +1,4 @@
+import { catVar } from './charts.js';
 // Outdoor strategy: search a course in OpenStreetMap, read holes and hazards, and simulate
 // the player's own shot pattern (from TrackMan club profiles) to suggest the tee club and aim line.
 // Everything runs in the browser. Course data is cached on the phone for use on the course.
@@ -61,14 +62,14 @@ const centroid = (pts) => ({ x: pts.reduce((s, p) => s + p.x, 0) / pts.length, y
 async function searchCourses(text) {
   const run = async (qq) => {
     const u = `${NOMINATIM}?format=jsonv2&limit=10&q=${encodeURIComponent(qq)}`;
-    const r = await fetch(u, { headers: { 'Accept-Language': 'no,en' } });
+    const r = await fetchT(u, { headers: { 'Accept-Language': 'no,en' } }, 15000);
     if (!r.ok) throw new Error('Søket feilet (' + r.status + ')');
     return (await r.json()).filter((x) => x.type === 'golf_course' && (x.osm_type === 'way' || x.osm_type === 'relation'));
   };
   let hits = await run(text);
   if (!hits.length && !/golf/i.test(text)) hits = await run(text + ' golf');
   return hits.map((h) => ({ id: h.osm_type[0] + h.osm_id, osm_type: h.osm_type, osm_id: h.osm_id, name: h.name || h.display_name.split(',')[0],
-    place: h.display_name.split(',').slice(1, 4).join(',').trim(), lat: +h.lat, lon: +h.lon }));
+    place: h.display_name.split(',').slice(1, 4).join(',').trim(), lat: +h.lat, lon: +h.lon, bbox: h.boundingbox }));
 }
 
 function kindOf(t) {
@@ -85,11 +86,18 @@ function kindOf(t) {
   return null;
 }
 
+// fetch with a time limit, so a busy map server never leaves the page hanging
+async function fetchT(url, opts = {}, ms = 25000) {
+  const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), ms);
+  try { return await fetch(url, { ...opts, signal: ctl.signal }); }
+  catch (e) { throw new Error(e.name === 'AbortError' ? 'Kartserveren svarte ikke i tide.' : 'Ingen kontakt med kartserveren.'); }
+  finally { clearTimeout(t); }
+}
 async function overpass(query) {
   let lastErr;
   for (const url of OVERPASS) {
     try {
-      const r = await fetch(url, { method: 'POST', body: 'data=' + encodeURIComponent(query), headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
+      const r = await fetchT(url, { method: 'POST', body: 'data=' + encodeURIComponent(query), headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
       const txt = await r.text();
       if (!r.ok || txt[0] !== '{') throw new Error('Kartserveren er opptatt. Prøv igjen om litt.');
       return JSON.parse(txt);
@@ -98,13 +106,31 @@ async function overpass(query) {
   throw lastErr;
 }
 
-async function loadCourse(c) {
+let SB = null; // Supabase client, set by renderStrategy
+function remember(c, data) {
+  ls.set(LS_PREFIX + c.id, data);
+  const recent = (ls.get(LS_RECENT) || []).filter((x) => x.id !== c.id);
+  recent.unshift({ id: c.id, osm_type: c.osm_type, osm_id: c.osm_id, name: c.name, place: c.place, lat: c.lat, lon: c.lon, bbox: c.bbox });
+  ls.set(LS_RECENT, recent.slice(0, 8));
+}
+async function loadCourse(c, refresh = false) {
   const cachedCourse = ls.get(LS_PREFIX + c.id);
-  if (cachedCourse && cachedCourse.v === 2) return cachedCourse;
-  const sel = `${c.osm_type}(${c.osm_id})`;
-  const qy = `[out:json][timeout:40];${sel}->.c;.c map_to_area->.a;
-    (way(area.a)["golf"];way(area.a)["natural"~"^(water|wood|scrub)$"];way(area.a)["landuse"="forest"];way(area.a)["waterway"];
-     relation(area.a)["natural"~"^(water|wood)$"];relation(area.a)["golf"];relation(area.a)["landuse"="forest"];);out geom;`;
+  if (!refresh && cachedCourse && cachedCourse.v === 2) return cachedCourse;
+  // 1) the server fetches the course once and keeps it in the database
+  if (SB) {
+    const { data, error } = await SB.functions.invoke('osm-course', { body: { osm_type: c.osm_type, osm_id: c.osm_id, name: c.name, place: c.place, lat: c.lat, lon: c.lon, bbox: c.bbox, refresh } });
+    if (!error && data && data.data) {
+      const out = { v: 2, id: c.id, name: c.name || data.name, place: c.place || data.place, lat: c.lat || data.lat, lon: c.lon || data.lon, feats: data.data.feats, loadedAt: data.fetched_at };
+      if (out.feats.some((f) => f.k === 'hole')) remember(c, out);
+      return out;
+    }
+    console.warn('osm-course', error);
+  }
+  // 2) fallback: ask the public map servers directly from the phone
+  const sel = c.bbox ? `(${+c.bbox[0] - 0.0015},${+c.bbox[2] - 0.0015},${+c.bbox[1] + 0.0015},${+c.bbox[3] + 0.0015})` : null;
+  const qy = sel
+    ? `[out:json][timeout:30];(way["golf"]${sel};way["natural"~"^(water|wood|scrub)$"]${sel};way["landuse"="forest"]${sel};way["waterway"]${sel};relation["natural"~"^(water|wood)$"]${sel};);out geom;`
+    : `[out:json][timeout:30];${c.osm_type}(${c.osm_id})->.c;.c map_to_area->.a;(way(area.a)["golf"];way(area.a)["natural"~"^(water|wood|scrub)$"];way(area.a)["landuse"="forest"];way(area.a)["waterway"];);out geom;`;
   const j = await overpass(qy);
   const feats = [];
   for (const el of j.elements) {
@@ -113,10 +139,7 @@ async function loadCourse(c) {
     if (el.type === 'relation' && el.members) for (const m of el.members) if (m.role !== 'inner' && m.geometry) feats.push({ k, tags: el.tags, g: m.geometry.map((p) => ({ lat: p.lat, lon: p.lon })) });
   }
   const data = { v: 2, id: c.id, name: c.name, place: c.place, lat: c.lat, lon: c.lon, feats, loadedAt: new Date().toISOString() };
-  ls.set(LS_PREFIX + c.id, data);
-  const recent = (ls.get(LS_RECENT) || []).filter((x) => x.id !== c.id);
-  recent.unshift({ id: c.id, osm_type: c.osm_type, osm_id: c.osm_id, name: c.name, place: c.place, lat: c.lat, lon: c.lon });
-  ls.set(LS_RECENT, recent.slice(0, 8));
+  if (feats.some((f) => f.k === 'hole')) remember(c, data);
   return data;
 }
 
@@ -285,6 +308,7 @@ const LIE_COLOR = { fairway: '#4cc38a', green: '#7fe0a8', rough: '#c9d36a', bunk
 
 export async function renderStrategy(view, ctx) {
   const { esc, fmt, getProfile, toast, setTitle } = ctx;
+  SB = ctx.sb;
   setTitle('Strategi');
   if (!state.clubs) {
     const d = new Date(); const from = new Date(d - 365 * 864e5).toISOString().slice(0, 10);
@@ -294,13 +318,18 @@ export async function renderStrategy(view, ctx) {
   if (!state.course) return renderSearch();
   return renderHole();
 
-  function renderSearch() {
+  async function renderSearch() {
     const recent = ls.get(LS_RECENT) || [];
-    view.innerHTML = `<p class="small muted" style="margin-top:8px">Søk opp banen du skal spille. Hull, bunkere og vann hentes fra OpenStreetMap, og strategien bygger på dine egne lengder og spredning fra TrackMan.</p>
+    let saved = [];
+    try { const { data } = await SB.from('course_maps').select('id,name,place,lat,lon,holes').order('fetched_at', { ascending: false }).limit(30); saved = (data || []).filter((x) => !recent.some((r) => r.id === x.id)); } catch { /* offline */ }
+    const pick = [...recent, ...saved.map((x) => ({ id: x.id, osm_type: x.id[0] === 'r' ? 'relation' : 'way', osm_id: +x.id.slice(1), name: x.name, place: x.place, lat: x.lat, lon: x.lon, holes: x.holes }))];
+    view.innerHTML = `<section class="hero" style="padding-bottom:16px"><div class="eyebrow">Strategi ute</div>
+        <div style="font-size:22px;font-weight:750;margin:4px 0 6px">Hvilken bane skal du spille?</div>
+        <div class="sub">Hull, bunkere og vann fra OpenStreetMap. Kølle og siktelinje regnes ut fra dine egne lengder og spredning fra TrackMan.</div></section>
       <form id="sf" class="row"><input type="search" id="sq" placeholder="F.eks. Bærum Golfklubb" style="flex:1" autocomplete="off">
       <button class="btn primary" type="submit">Søk</button></form>
       <div id="sres"></div>
-      ${recent.length ? `<h3>Nylig brukt</h3><ul class="list card">${recent.map((r, i) => `<li><a href="#/strategi" data-recent="${i}" class="rtitle">${esc(r.name)}</a><div class="small muted">${esc(r.place || '')}</div></li>`).join('')}</ul>` : ''}`;
+      ${pick.length ? `<h2>Dine baner</h2><div class="card"><ul class="list">${pick.map((r, i) => `<li><a href="#/strategi" data-recent="${i}" class="rtitle">${esc(r.name)}</a><div class="small muted">${esc(r.place || '')}${r.holes ? ' · ' + r.holes + ' hull lagret' : ' · lagret på telefonen'}</div></li>`).join('')}</ul></div>` : ''}`;
     const sres = view.querySelector('#sres');
     view.querySelector('#sf').addEventListener('submit', async (e) => {
       e.preventDefault();
@@ -313,11 +342,11 @@ export async function renderStrategy(view, ctx) {
         sres.querySelectorAll('[data-hit]').forEach((a) => a.onclick = (ev) => { ev.preventDefault(); open(hits[+a.dataset.hit]); });
       } catch (err) { sres.innerHTML = `<div class="card warn">${esc(err.message)}</div>`; }
     });
-    view.querySelectorAll('[data-recent]').forEach((a) => a.onclick = (ev) => { ev.preventDefault(); open(recent[+a.dataset.recent]); });
+    view.querySelectorAll('[data-recent]').forEach((a) => a.onclick = (ev) => { ev.preventDefault(); open(pick[+a.dataset.recent]); });
   }
 
   async function open(c) {
-    view.innerHTML = `<div class="loading">Henter hull og hindre for ${esc(c.name)}…</div>`;
+    view.innerHTML = `<div class="loading">Henter hull og hindre for ${esc(c.name)}…<div class="small">Første gang kan det ta opptil ett minutt. Deretter er banen lagret.</div></div>`;
     try {
       const data = await loadCourse(c);
       const holes = buildHoles(data);
@@ -330,7 +359,8 @@ export async function renderStrategy(view, ctx) {
       }
       Object.assign(state, { course: data, holes, idx: 0, teeShift: 0, plan: null });
       renderHole();
-    } catch (err) { view.innerHTML = `<div class="card warn">${esc(err.message)}</div><button class="btn" id="back">Tilbake</button>`; view.querySelector('#back').onclick = () => renderSearch(); }
+    } catch (err) { view.innerHTML = `<div class="card warn">${esc(err.message)} Prøv igjen om litt.</div><div class="row"><button class="btn primary" id="retry">Prøv igjen</button><button class="btn" id="back">Tilbake</button></div>`;
+      view.querySelector('#retry').onclick = () => open(c); view.querySelector('#back').onclick = () => renderSearch(); }
   }
 
   function renderHole() {
@@ -372,8 +402,10 @@ export async function renderStrategy(view, ctx) {
     const aimTxt = (o) => Math.abs(o.aimOff) < 1 ? 'midt i' : `${Math.abs(o.aimOff)} m ${o.aimOff < 0 ? 'venstre' : 'høyre'} for midten`;
     const par3 = state.holes[state.idx].par === 3;
     const bar = (p) => `<div class="meter" aria-hidden="true">${['fairway', 'green', 'rough', 'bunker', 'trees', 'water'].map((k) => p[k] ? `<i style="width:${p[k] * 100}%;background:${LIE_COLOR[k]}"></i>` : '').join('')}</div>`;
-    box.innerHTML = `<b>Forslag: ${esc(best.club.club)}</b>, sikt ${aimTxt(best)}.
-      <div class="small muted" style="margin-bottom:6px">${par3 ? `Treffer green ${Math.round(best.p.green * 100)} %` : `Fairway ${Math.round(best.p.fairway * 100)} %`}${best.p.water > 0.01 ? ` · vann ${Math.round(best.p.water * 100)} %` : ''}${par3 ? '' : ` · igjen ca. ${fmt(best.remaining)} m`}.</div>` +
+    box.innerHTML = `<div class="tip-card"><div class="club-badge" style="background:${catVar(best.club.category)}">${esc(best.club.club.replace('Pitching Wedge', 'PW')).replace(' ', '<br>')}</div>
+      <div><div class="small muted">Anbefalt fra tee</div><div style="font-size:18px;font-weight:750">${esc(best.club.club)}, sikt ${aimTxt(best)}</div>
+      <div class="small muted" style="margin-top:2px">${par3 ? `Treffer green ${Math.round(best.p.green * 100)} %` : `Fairway ${Math.round(best.p.fairway * 100)} %`}${best.p.water > 0.01 ? ` · vann ${Math.round(best.p.water * 100)} %` : ''}${par3 ? '' : ` · igjen ca. ${fmt(best.remaining)} m`}</div></div></div>
+      <div class="legend" style="margin-top:12px">${[['fairway', 'Fairway'], ['green', 'Green'], ['rough', 'Rough'], ['bunker', 'Bunker'], ['trees', 'Skog/utenfor'], ['water', 'Vann']].map(([k, l]) => `<span><i style="background:${LIE_COLOR[k]}"></i>${l}</span>`).join('')}</div>` +
       opts.slice(0, 5).map((o, i) => `<div class="opt ${i === 0 ? 'best' : ''}" data-o="${i}" style="cursor:pointer">
         <div class="oname">${esc(o.club.club)}</div><div class="num small">${i === 0 ? 'forventet ' + fmt(o.exp, 2) + ' slag' : (o.exp - best.exp < 0.04 ? 'omtrent like bra' : '+' + fmt(o.exp - best.exp, 2) + ' slag')}</div>
         <div class="ometa">${bar(o.p)}<div style="margin-top:4px">${par3 ? `Green ${Math.round(o.p.green * 100)} %` : `Fairway ${Math.round(o.p.fairway * 100)} %`}
