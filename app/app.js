@@ -126,7 +126,6 @@ async function renderLogin() {
         <div class="row" style="margin-top:16px"><button class="btn primary" type="submit">Logg inn</button><span id="lerr" class="small" style="color:var(--bad)"></span></div>
       </form>
     </div>`;
-  const hero = $view.querySelector('.login-hero svg'); if (hero) { hero.querySelector('circle').setAttribute('fill', 'var(--accent)'); }
   document.getElementById('login').addEventListener('submit', async (e) => {
     e.preventDefault();
     const { error } = await sb.auth.signInWithPassword({ email: em.value.trim(), password: pw.value });

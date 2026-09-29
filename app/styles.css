@@ -36,7 +36,7 @@ button { font: inherit; }
 .top { position: sticky; top: 0; z-index: 10; display: flex; align-items: center; gap: 10px;
   padding: calc(12px + env(safe-area-inset-top)) 16px 12px; color: #fff;
   background: repeating-linear-gradient(100deg, rgba(255,255,255,.045) 0 38px, transparent 38px 76px), linear-gradient(120deg, var(--hero-1), var(--hero-2)); }
-.top .logo { width: 30px; height: 30px; flex: 0 0 auto; }
+.top .logo { width: 34px; height: 34px; flex: 0 0 auto; border-radius: 9px; box-shadow: 0 1px 4px rgba(0,0,0,.3); }
 .top h1 { font-size: 19px; margin: 0; letter-spacing: .2px; font-weight: 700; flex: 1; }
 .icon-btn { background: rgba(255,255,255,.12); border: 0; color: #fff; font-size: 18px; width: 36px; height: 36px; border-radius: 50%; cursor: pointer; }
 
@@ -219,4 +219,4 @@ table.t th, table.t td { padding: 7px 4px; border-bottom: 1px solid var(--line);
 table.t th { color: var(--muted); font-weight: 600; font-size: 12px; }
 table.t th:first-child, table.t td:first-child { text-align: left; }
 .login-hero { text-align: center; padding: 30px 0 6px; }
-.login-hero svg { width: 72px; height: 72px; }
+.login-hero img { width: 120px; height: 120px; border-radius: 28px; box-shadow: 0 8px 24px rgba(0,0,0,.25); }
