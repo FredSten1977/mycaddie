@@ -115,12 +115,12 @@ function remember(c, data) {
 }
 async function loadCourse(c, refresh = false) {
   const cachedCourse = ls.get(LS_PREFIX + c.id);
-  if (!refresh && cachedCourse && cachedCourse.v === 2) return cachedCourse;
+  if (!refresh && cachedCourse && cachedCourse.v === 3) return cachedCourse;
   // 1) the server fetches the course once and keeps it in the database
   if (SB) {
     const { data, error } = await SB.functions.invoke('osm-course', { body: { osm_type: c.osm_type, osm_id: c.osm_id, name: c.name, place: c.place, lat: c.lat, lon: c.lon, bbox: c.bbox, refresh } });
     if (!error && data && data.data) {
-      const out = { v: 2, id: c.id, name: c.name || data.name, place: c.place || data.place, lat: c.lat || data.lat, lon: c.lon || data.lon, feats: data.data.feats, loadedAt: data.fetched_at };
+      const out = { v: 3, id: c.id, name: c.name || data.name, place: c.place || data.place, lat: c.lat || data.lat, lon: c.lon || data.lon, feats: data.data.feats, elev: data.data.elev || null, loadedAt: data.fetched_at };
       if (out.feats.some((f) => f.k === 'hole')) remember(c, out);
       return out;
     }
@@ -138,7 +138,7 @@ async function loadCourse(c, refresh = false) {
     if (el.type === 'way' && el.geometry) feats.push({ k, tags: el.tags, g: el.geometry.map((p) => ({ lat: p.lat, lon: p.lon })) });
     if (el.type === 'relation' && el.members) for (const m of el.members) if (m.role !== 'inner' && m.geometry) feats.push({ k, tags: el.tags, g: m.geometry.map((p) => ({ lat: p.lat, lon: p.lon })) });
   }
-  const data = { v: 2, id: c.id, name: c.name, place: c.place, lat: c.lat, lon: c.lon, feats, loadedAt: new Date().toISOString() };
+  const data = { v: 3, id: c.id, name: c.name, place: c.place, lat: c.lat, lon: c.lon, feats, elev: null, loadedAt: new Date().toISOString() };
   if (feats.some((f) => f.k === 'hole')) remember(c, data);
   return data;
 }
@@ -152,6 +152,7 @@ function buildHoles(course) {
     return { k: f.k, pts: f.pts, closed, box: bbox(f.pts), tags: f.tags };
   });
   const tees = polys.filter((p) => p.k === 'tee');
+  const elevPts = (course.elev?.pts || []).map(([lat, lon, z]) => ({ ...P.to({ lat, lon }), z }));
   const holes = all.filter((f) => f.k === 'hole' && f.pts.length >= 2).map((f) => {
     let pts = f.pts;
     // play direction: the end closest to a tee box is the start
@@ -167,10 +168,82 @@ function buildHoles(course) {
     const near = polys.filter((p) => p.box.x1 >= hb.x0 - 90 && p.box.x0 <= hb.x1 + 90 && p.box.y1 >= hb.y0 - 90 && p.box.y0 <= hb.y1 + 90);
     const green = near.filter((p) => p.k === 'green' && p.closed).sort((a, b) => dist(centroid(a.pts), pts[pts.length - 1]) - dist(centroid(b.pts), pts[pts.length - 1]))[0];
     const pin = green ? centroid(green.pts) : pts[pts.length - 1];
-    return { ref: Number.isFinite(ref) ? ref : null, par, hcp: parseInt(f.tags.handicap, 10) || null, len, pts, pin, near, green, P };
+    const elev = elevPts.filter((q) => inBox(hb, q, 80));
+    const hole = { ref: Number.isFinite(ref) ? ref : null, par, hcp: parseInt(f.tags.handicap, 10) || null, len, pts, pin, near, green, P, elev };
+    hole.corridor = corridorOf(hole);
+    return hole;
   }).sort((a, b) => (a.ref ?? 99) - (b.ref ?? 99));
   return holes;
 }
+
+// ------------------------------------------------------------------ settings (per phone)
+const LS_SETTINGS = 'mc_strategy_settings';
+const DEFAULTS = { winMin: 100, winMax: 115, offFairway: 'skog', sideInflate: 1.15, risk: 'forsiktig' };
+export function getSettings() { return { ...DEFAULTS, ...(ls.get(LS_SETTINGS) || {}) }; }
+function saveSettings(s) { ls.set(LS_SETTINGS, s); }
+
+// ------------------------------------------------------------------ terrain
+// Height at a point: inverse-distance weighting of the 4 nearest samples (within 70 m).
+function elevAt(hole, p) {
+  const e = hole.elev; if (!e || !e.length) return null;
+  if (!hole.eg) { // bucket grid, 25 m cells
+    hole.eg = new Map();
+    for (const q of e) { const k = Math.floor(q.x / 25) + ':' + Math.floor(q.y / 25); if (!hole.eg.has(k)) hole.eg.set(k, []); hole.eg.get(k).push(q); }
+  }
+  const cx = Math.floor(p.x / 25), cy = Math.floor(p.y / 25);
+  const best = [];
+  for (let r = 1; r <= 3 && best.length < 4; r++) {
+    best.length = 0;
+    for (let i = cx - r; i <= cx + r; i++) for (let j = cy - r; j <= cy + r; j++) {
+      const b = hole.eg.get(i + ':' + j); if (!b) continue;
+      for (const q of b) {
+        const d2 = (q.x - p.x) ** 2 + (q.y - p.y) ** 2;
+        if (best.length < 4) { best.push([d2, q.z]); best.sort((a, c) => a[0] - c[0]); }
+        else if (d2 < best[3][0]) { best[3] = [d2, q.z]; best.sort((a, c) => a[0] - c[0]); }
+      }
+    }
+  }
+  if (!best.length) return null;
+  if (best[0][0] < 1) return best[0][1];
+  let w = 0, z = 0; for (const [d2, zz] of best) { const k = 1 / d2; w += k; z += k * zz; }
+  return z / w;
+}
+const dz = (hole, a, b) => { const za = elevAt(hole, a), zb = elevAt(hole, b); return za === null || zb === null ? 0 : zb - za; };
+// Landing (descent) angle by club type, used to turn height difference into carry: Δcarry = −Δh / tan(angle)
+const DESCENT = { driver: 38, wood: 42, hybrid: 45, iron: 48, wedge: 52 };
+const tanDesc = (c) => Math.tan(((DESCENT[c.category] || 46) * Math.PI) / 180);
+// plays-like distance for an approach: horizontal distance plus ~0.9 m per metre the green sits higher
+function playsLike(hole, from, to) { return dist(from, to) + 0.9 * dz(hole, from, to); }
+
+// Elevation profile along the centre line (for the chart)
+function profileOf(hole, teeShift) {
+  if (!hole.elev || !hole.elev.length) return null;
+  const out = [];
+  const L = hole.len;
+  for (let s = teeShift; s <= L; s += 5) { const z = elevAt(hole, pointAt(hole.pts, s)); if (z !== null) out.push({ s: s - teeShift, z }); }
+  const zp = elevAt(hole, hole.pin); if (zp !== null) out.push({ s: L - teeShift, z: zp });
+  return out.length > 3 ? out : null;
+}
+
+// ------------------------------------------------------------------ corridor (where is fairway, how wide)
+// For every 10 m along the hole: the fairway's left/right edge relative to the centre line (null = not mapped there).
+function corridorOf(hole) {
+  const fws = hole.near.filter((f) => f.k === 'fairway' && f.closed);
+  const rows = [];
+  for (let s = 0; s <= hole.len; s += 10) {
+    const a = pointAt(hole.pts, Math.max(0, s - 2)), b = pointAt(hole.pts, Math.min(hole.len, s + 2));
+    const dx = b.x - a.x, dy = b.y - a.y, L = Math.hypot(dx, dy) || 1, nx = dy / L, ny = -dx / L; // right-hand normal
+    const c = pointAt(hole.pts, s);
+    let lo = null, hi = null;
+    for (let o = -70; o <= 70; o += 2) {
+      const p = { x: c.x + nx * o, y: c.y + ny * o };
+      if (fws.some((f) => inBox(f.box, p) && inPoly(f.pts, p))) { if (lo === null) lo = o; hi = o; }
+    }
+    rows.push(lo === null ? null : { lo, hi });
+  }
+  return { rows, mapped: fws.length > 0 };
+}
+function corridorAt(hole, s) { const r = hole.corridor.rows[Math.max(0, Math.min(hole.corridor.rows.length - 1, Math.round(s / 10)))]; return r; }
 
 // ------------------------------------------------------------------ player model
 // Seeded random numbers: every club is tested against the same sequence of "swings" (common random numbers),
@@ -184,17 +257,17 @@ function carryQuantile(c, u) {
   for (let i = 1; i < k.length; i++) if (u <= k[i][0]) { const [u0, v0] = k[i - 1], [u1, v1] = k[i]; return v0 + (v1 - v0) * (u - u0) / (u1 - u0); }
   return k[k.length - 1][1];
 }
-function sampleShot(c) {
+const sideSd = (c, set) => Math.max(3, (+c.side_abs_p80 || 10) / 1.2816) * set.sideInflate;
+function sampleShot(c, set, lieFactor = 1) {
   const mishit = rnd() < (+c.mishit_pct || 0) / 100;
-  let carry = carryQuantile(c, 0.02 + rnd() * 0.97);
-  const sd = Math.max(3, (+c.side_abs_p80 || 10) / 1.2816);
-  let side = (+c.side_mean || 0) + randn() * sd;
+  let carry = carryQuantile(c, 0.02 + rnd() * 0.97) * lieFactor;
+  let side = (+c.side_mean || 0) + randn() * sideSd(c, set) * (lieFactor < 1 ? 1.3 : 1);
   if (mishit) { carry *= 0.55 + rnd() * 0.25; side *= 1.4; }
   const roll = Math.max(0, (+c.total_p50 || +c.carry_p50) - +c.carry_p50) * (mishit ? 1.3 : 1);
   return { carry, side, roll };
 }
 
-// Expected strokes to hole out from a distance and lie (rough model for a mid-handicap player)
+// Expected strokes to hole out from a (plays-like) distance and lie – rough model for a mid-handicap player
 function E(d, lie) {
   const fw = d <= 20 ? 2.35 : 2.45 + 0.0055 * d;
   switch (lie) {
@@ -202,11 +275,12 @@ function E(d, lie) {
     case 'fairway': case 'tee': return fw;
     case 'rough': return fw + 0.22;
     case 'bunker': return d <= 40 ? 2.85 + 0.004 * d : fw + 0.45;
-    case 'trees': return fw + 0.75;
+    case 'trees': return fw + 0.8;
     default: return fw + 0.22;
   }
 }
-function lieAt(hole, p) {
+// Mapped features first; where nothing is mapped, use the fairway corridor and the "off fairway" setting.
+function lieAt(hole, p, set) {
   let lie = null;
   for (const f of hole.near) {
     if (!inBox(f.box, p, f.closed ? 0 : 6)) continue;
@@ -216,70 +290,134 @@ function lieAt(hole, p) {
     if (f.k === 'oob') return 'oob';
     if (f.k === 'bunker') lie = 'bunker';
     else if (f.k === 'green' && lie !== 'bunker') lie = 'green';
-    else if (f.k === 'trees' && !lie) lie = 'trees';
-    else if ((f.k === 'fairway' || f.k === 'tee') && (!lie || lie === 'trees' || lie === 'rough')) lie = 'fairway';
+    else if ((f.k === 'fairway' || f.k === 'tee') && lie !== 'bunker' && lie !== 'green') lie = 'fairway';
     else if (f.k === 'rough' && !lie) lie = 'rough';
+    else if (f.k === 'trees' && !lie) lie = 'trees';
   }
   if (lie) return lie;
-  return project(hole.pts, p).d > 65 ? 'wild' : 'rough';
+  const pr = project(hole.pts, p);
+  const cor = corridorAt(hole, pr.s);
+  let lo = -15, hi = 15;
+  if (cor) { lo = cor.lo; hi = cor.hi; }
+  else if (hole.corridor.mapped) { lo = -12; hi = 12; } // fairway mapped elsewhere on the hole but not here (carry area): treat as rough
+  const out = pr.lat < lo ? lo - pr.lat : pr.lat > hi ? pr.lat - hi : 0;
+  if (out === 0) return hole.corridor.mapped ? 'rough' : 'fairway';
+  if (out <= 12) return 'rough';
+  if (set.offFairway === 'skog') return out > 35 ? 'lost' : 'trees';
+  return out > 60 ? 'trees' : 'rough';
 }
 
-// Simulate one club with one aim offset from a start point toward a target point
-function simulate(hole, club, start, target, aimOff, n = N_SAMPLES) {
-  const dx = target.x - start.x, dy = target.y - start.y, L = Math.hypot(dx, dy) || 1;
-  const ux = dx / L, uy = dy / L, px = uy, py = -ux; // px,py = right-hand normal
-  const tgt = { x: target.x + px * aimOff, y: target.y + py * aimOff };
-  const ax = tgt.x - start.x, ay = tgt.y - start.y, AL = Math.hypot(ax, ay) || 1;
+// One shot: flat carry is corrected for height difference at the landing spot, roll for the slope.
+function shoot(hole, club, start, aim, set, lieFactor = 1) {
+  const ax = aim.x - start.x, ay = aim.y - start.y, AL = Math.hypot(ax, ay) || 1;
   const vx = ax / AL, vy = ay / AL, nx = vy, ny = -vx;
+  const s = sampleShot(club, set, lieFactor);
+  const z0 = elevAt(hole, start), t = tanDesc(club);
+  let carry = s.carry, land;
+  for (let it = 0; it < 2; it++) {
+    land = { x: start.x + vx * carry + nx * s.side, y: start.y + vy * carry + ny * s.side };
+    const z1 = elevAt(hole, land);
+    if (z0 === null || z1 === null) break;
+    carry = Math.max(5, s.carry - (z1 - z0) / t);
+  }
+  let lie = lieAt(hole, land, set), end = land, pen = 0, label = lie;
+  if (lie === 'water') { pen = 1; lie = 'rough'; label = 'water'; }
+  else if (lie === 'oob' || lie === 'lost') { pen = 2; lie = 'tee'; end = start; label = 'oob'; } // stroke and distance
+  else if (lie === 'fairway' || lie === 'rough') {
+    const za = elevAt(hole, land), zb = elevAt(hole, { x: land.x + vx * 10, y: land.y + vy * 10 });
+    const grade = za === null || zb === null ? 0 : (zb - za) / 10;
+    const r = s.roll * (lie === 'fairway' ? 1 : 0.4) * Math.max(0.4, Math.min(1.8, 1 - 6 * grade));
+    const e2 = { x: land.x + vx * r, y: land.y + vy * r };
+    const lie2 = lieAt(hole, e2, set);
+    if (lie2 === 'water') { pen = 1; lie = 'rough'; label = 'water'; }
+    else if (lie2 === 'oob' || lie2 === 'lost') { end = land; }
+    else { end = e2; lie = lie2; label = lie2; }
+  }
+  return { end, lie, pen, label, land };
+}
+const LIE_FACTOR = { fairway: 1, tee: 1, rough: 0.93, bunker: 0.85, trees: 0.6, green: 1 };
+const winPenalty = (d, set) => { const out = d < set.winMin ? set.winMin - d : d > set.winMax ? d - set.winMax : 0; return Math.min(0.4, 0.008 * out); };
+// Careful play: extra cost for trouble (trees, water, out) and bunkers, on top of the expected strokes
+const RISK = { forsiktig: { trouble: 0.6, bunker: 0.25 }, 'nøytral': { trouble: 0, bunker: 0 } };
+
+// Pick the club whose normal total distance best matches a plays-like distance (longest club first when short of reach)
+function clubFor(clubs, need, { allowDriver = false } = {}) {
+  const cands = clubs.filter((c) => allowDriver || c.category !== 'driver');
+  let best = null;
+  for (const c of cands) { const d = Math.abs((+c.total_p50 || +c.carry_p50) - need); if (!best || d < best.d) best = { c, d }; }
+  return best && best.c;
+}
+// Point on the centre line that leaves a given plays-like distance to the pin
+function layupPoint(hole, want) {
+  let bestS = 0, bestD = Infinity;
+  for (let s = 0; s <= hole.len; s += 5) { const p = pointAt(hole.pts, s); const d = Math.abs(playsLike(hole, p, hole.pin) - want); if (d < bestD) { bestD = d; bestS = s; } }
+  return { s: bestS, p: pointAt(hole.pts, bestS) };
+}
+
+// Simulate a tee club (+ planned layup on par 5) and score it: expected strokes + penalty outside your approach window.
+function evaluate(hole, club, start, aimOff, set, clubs, n) {
+  const L = hole.len;
+  const par3 = hole.par === 3, par5 = hole.par === 5;
+  const reach = par3 ? L : Math.min(+club.total_p50 || +club.carry_p50, L - 5);
+  const sStart = project(hole.pts, start).s;
+  const base = par3 ? hole.pin : pointAt(hole.pts, Math.min(L, sStart + reach));
+  const dx = base.x - start.x, dy = base.y - start.y, BL = Math.hypot(dx, dy) || 1;
+  const aim = { x: base.x + (dy / BL) * aimOff, y: base.y + (-dx / BL) * aimOff };
+  const want = (set.winMin + set.winMax) / 2;
+  const lay = par5 ? layupPoint(hole, want) : null;
   seed(12345);
-  let sumE = 0; const cnt = { fairway: 0, green: 0, rough: 0, bunker: 0, trees: 0, water: 0, wild: 0, oob: 0 };
-  const rem = []; const dots = [];
+  let sum = 0, inWin = 0; const cnt = {}; const rem = []; const dots = []; const dots2 = []; const second = {};
   for (let i = 0; i < n; i++) {
-    const s = sampleShot(club);
-    const land = { x: start.x + vx * s.carry + nx * s.side, y: start.y + vy * s.carry + ny * s.side };
-    let lie = lieAt(hole, land), end = land, pen = 0;
-    if (lie === 'water') { pen = 1; lie = 'rough'; }
-    else if (lie === 'oob') { pen = 2; lie = 'tee'; end = start; }
-    else if (lie === 'fairway' || lie === 'rough') {
-      const r = lie === 'fairway' ? s.roll : s.roll * 0.4;
-      const e2 = { x: land.x + vx * r, y: land.y + vy * r };
-      const lie2 = lieAt(hole, e2);
-      if (lie2 === 'water') { pen = 1; lie = 'rough'; end = land; }
-      else { end = e2; lie = lie2 === 'oob' ? 'rough' : lie2; }
+    const t = shoot(hole, club, start, aim, set);
+    let strokes = 1 + t.pen, pos = t.end, lie = t.lie;
+    cnt[t.label] = (cnt[t.label] || 0) + 1;
+    if (i < 160) dots.push({ ...t.end, label: t.label });
+    if (par5) {
+      // second shot: lay up to the window (or go for it if within reach of a normal club)
+      const toPin = playsLike(hole, pos, hole.pin);
+      const need = playsLike(hole, pos, lay.p);
+      const layClub = clubFor(clubs, need) || club;
+      const goClub = clubFor(clubs, toPin);
+      const canGo = goClub && Math.abs((+goClub.carry_p50) - toPin) < 12 && lie !== 'trees';
+      const c2 = canGo ? goClub : layClub;
+      const tgt2 = canGo ? hole.pin : lay.p;
+      const t2 = shoot(hole, c2, pos, tgt2, set, LIE_FACTOR[lie] || 1);
+      strokes += 1 + t2.pen; pos = t2.end; lie = t2.lie;
+      const key = canGo ? 'go:' + c2.club : c2.club; second[key] = (second[key] || 0) + 1;
+      if (i < 120) dots2.push({ ...t2.end, label: t2.label });
     }
-    let label = pen ? (pen === 2 ? 'oob' : 'water') : lie;
-    if (lie === 'wild') { pen += 0.5; lie = 'trees'; }
-    const d = dist(end, hole.pin);
-    sumE += 1 + pen + E(d, lie);
-    cnt[label] = (cnt[label] || 0) + 1; rem.push(d);
-    if (i < 160) dots.push({ ...end, label });
+    const d = playsLike(hole, pos, hole.pin);
+    const wp = par3 ? 0 : winPenalty(d, set);
+    if (!par3 && d >= set.winMin - 5 && d <= set.winMax + 5) inWin++;
+    sum += strokes + E(d, lie) + wp;
+    rem.push(d);
   }
   rem.sort((a, b) => a - b);
-  const pc = (k) => cnt[k] / n;
-  return { club, aimOff, exp: sumE / n, p: { fairway: pc('fairway'), green: pc('green'), rough: pc('rough'), bunker: pc('bunker'),
-    trees: pc('trees') + pc('wild'), water: pc('water') + pc('oob') }, remaining: rem[Math.floor(n / 2)], dots, target: tgt };
+  const pc = (k) => (cnt[k] || 0) / n;
+  const rk = RISK[set.risk] || RISK.forsiktig;
+  const riskCost = rk.trouble * (pc('trees') + pc('water') + pc('oob')) + rk.bunker * pc('bunker');
+  const sec = Object.entries(second).sort((a, b) => b[1] - a[1])[0];
+  return { club, aimOff, score: sum / n + riskCost, exp: sum / n, p: { fairway: pc('fairway'), green: pc('green'), rough: pc('rough'), bunker: pc('bunker'),
+    trees: pc('trees'), water: pc('water'), oob: pc('oob') }, remaining: rem[Math.floor(n / 2)], inWin: inWin / n,
+    dots, dots2, target: aim, lay, second: sec ? { club: sec[0].replace(/^go:/, ''), go: sec[0].startsWith('go:'), share: sec[1] / n } : null };
 }
 
-function planHole(hole, clubs, teeShift) {
+function planHole(hole, clubs, teeShift, set) {
   const start = pointAt(hole.pts, Math.max(0, teeShift));
   const L = hole.len - teeShift;
-  const offsets = [-16, -8, 0, 8, 16];
+  const offsets = [-14, -7, 0, 7, 14];
   const opts = [];
+  const plPin = playsLike(hole, start, hole.pin);
   const cands = hole.par === 3
-    ? clubs.filter((c) => +c.carry_p50 > L * 0.8 && +c.carry_p50 < L * 1.25)
-    : clubs.filter((c) => c.category !== 'wedge' && +c.carry_p50 >= 120 && +c.carry_p50 < L + 20);
+    ? clubs.filter((c) => +c.carry_p50 > plPin * 0.8 && +c.carry_p50 < plPin * 1.2)
+    : clubs.filter((c) => c.category !== 'wedge' && +c.carry_p50 >= 110 && +c.carry_p50 < L + 20);
   for (const c of cands) {
     let best = null;
-    const reach = hole.par === 3 ? L : Math.min(+c.total_p50 || +c.carry_p50, L - 5);
-    const target = hole.par === 3 ? hole.pin : pointAt(hole.pts, teeShift + reach);
-    for (const o of offsets) {
-      const r = simulate(hole, c, start, target, o, 250);
-      if (!best || r.exp < best.exp) best = r;
-    }
-    opts.push(simulate(hole, c, start, target, best.aimOff, N_SAMPLES));
+    for (const o of offsets) { const r = evaluate(hole, c, start, o, set, clubs, 120); if (!best || r.score < best.score) best = r; }
+    opts.push(evaluate(hole, c, start, best.aimOff, set, clubs, N_SAMPLES));
   }
-  opts.sort((a, b) => a.exp - b.exp);
-  return { start, L, opts };
+  opts.sort((a, b) => a.score - b.score);
+  return { start, L, plPin, opts };
 }
 
 // hazards along the hole: along-distance from the tee and side
@@ -305,6 +443,26 @@ function hazardsOf(hole, teeShift) {
 const state = { course: null, holes: null, idx: 0, teeShift: 0, clubs: null, map: null, layers: null, plan: null, sel: 0 };
 const K_NAME = { water: 'Vann', bunker: 'Bunker', trees: 'Skog' };
 const LIE_COLOR = { fairway: '#4cc38a', green: '#7fe0a8', rough: '#c9d36a', bunker: '#e0c27f', trees: '#8a6d3b', water: '#2f6fb3', oob: '#b3261e', wild: '#b3261e' };
+const short = (n) => n.replace('Pitching Wedge', 'PW').replace(' Iron', '-jern').replace(' Wood', '-wood').replace(' Hybrid', '-hybrid');
+
+function profileSvg(prof, fmt) {
+  const W = 340, H = 120, pl = 34, pr = 10, pt = 12, pb = 22;
+  const zs = prof.map((p) => p.z), zmin = Math.min(...zs), zmax = Math.max(...zs);
+  const span = Math.max(8, zmax - zmin), z0 = zmin - span * 0.15, z1 = zmax + span * 0.15;
+  const smax = prof[prof.length - 1].s;
+  const X = (s) => pl + (s / smax) * (W - pl - pr), Y = (z) => pt + ((z1 - z) / (z1 - z0)) * (H - pt - pb);
+  const line = prof.map((p, i) => `${i ? 'L' : 'M'}${X(p.s).toFixed(1)},${Y(p.z).toFixed(1)}`).join('');
+  const area = line + `L${X(smax)},${H - pb}L${X(0)},${H - pb}Z`;
+  const zt = prof[0].z, zg = prof[prof.length - 1].z;
+  let ticks = ''; for (let s = 50; s < smax; s += 50) ticks += `<text x="${X(s)}" y="${H - 6}" class="axis" text-anchor="middle">${s}</text>`;
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" role="img" aria-label="Høydeprofil fra tee til green">
+    <path d="${area}" fill="color-mix(in srgb, var(--accent) 18%, transparent)"/><path d="${line}" class="trend"/>
+    <line x1="${pl}" x2="${W - pr}" y1="${Y(zt)}" y2="${Y(zt)}" class="grid zero"/>
+    <text x="${pl - 4}" y="${Y(zt) + 4}" class="axis" text-anchor="end">tee</text>
+    <circle cx="${X(smax)}" cy="${Y(zg)}" r="4" fill="var(--bad)"/>
+    <text x="${X(smax) - 6}" y="${Y(zg) - 8}" class="axis" text-anchor="end">${zg - zt > 0 ? '+' : ''}${fmt(zg - zt)} m</text>
+    ${ticks}</svg>`;
+}
 
 export async function renderStrategy(view, ctx) {
   const { esc, fmt, getProfile, toast, setTitle } = ctx;
@@ -325,7 +483,7 @@ export async function renderStrategy(view, ctx) {
     const pick = [...recent, ...saved.map((x) => ({ id: x.id, osm_type: x.id[0] === 'r' ? 'relation' : 'way', osm_id: +x.id.slice(1), name: x.name, place: x.place, lat: x.lat, lon: x.lon, holes: x.holes }))];
     view.innerHTML = `<section class="hero" style="padding-bottom:16px"><div class="eyebrow">Strategi ute</div>
         <div style="font-size:22px;font-weight:750;margin:4px 0 6px">Hvilken bane skal du spille?</div>
-        <div class="sub">Hull, bunkere og vann fra OpenStreetMap. Kølle og siktelinje regnes ut fra dine egne lengder og spredning fra TrackMan.</div></section>
+        <div class="sub">Hull, bunkere og vann fra OpenStreetMap, høyder fra Kartverket. Kølle og siktelinje regnes ut fra dine egne lengder og spredning fra TrackMan.</div></section>
       <form id="sf" class="row"><input type="search" id="sq" placeholder="F.eks. Bærum Golfklubb" style="flex:1" autocomplete="off">
       <button class="btn primary" type="submit">Søk</button></form>
       <div id="sres"></div>
@@ -346,7 +504,7 @@ export async function renderStrategy(view, ctx) {
   }
 
   async function open(c) {
-    view.innerHTML = `<div class="loading">Henter hull og hindre for ${esc(c.name)}…<div class="small">Første gang kan det ta opptil ett minutt. Deretter er banen lagret.</div></div>`;
+    view.innerHTML = `<div class="loading">Henter hull, hindre og høyder for ${esc(c.name)}…<div class="small">Første gang kan det ta opptil ett minutt. Deretter er banen lagret.</div></div>`;
     try {
       const data = await loadCourse(c);
       const holes = buildHoles(data);
@@ -364,54 +522,93 @@ export async function renderStrategy(view, ctx) {
   }
 
   function renderHole() {
+    const set = getSettings();
     const h = state.holes[state.idx];
     const counts = { water: 0, bunker: 0, fairway: 0, green: 0 };
     h.near.forEach((f) => { if (counts[f.k] !== undefined) counts[f.k]++; });
     const thin = !counts.fairway && !counts.bunker && !counts.water;
-    const plan = planHole(h, state.clubs, state.teeShift);
+    const plan = planHole(h, state.clubs, state.teeShift, set);
     state.plan = plan; state.sel = 0;
     const haz = hazardsOf(h, state.teeShift);
+    const prof = profileOf(h, state.teeShift);
+    const dzHole = prof ? prof[prof.length - 1].z - prof[0].z : null;
     view.innerHTML = `
       <div class="row" style="margin-top:6px"><b style="flex:1">${esc(state.course.name)}</b>
         <button class="btn sm ghost" id="chg">Bytt bane</button></div>
       <div class="hole-nav" id="hn">${state.holes.map((x, i) => `<button class="${i === state.idx ? 'on' : ''}" data-i="${i}">${x.ref ?? i + 1}</button>`).join('')}</div>
       <div class="kpis">
-        <div class="kpi"><div class="v">${h.ref ?? state.idx + 1}</div><div class="l">Hull</div></div>
-        <div class="kpi"><div class="v">${h.par}</div><div class="l">Par${h.hcp ? ' · hcp ' + h.hcp : ''}</div></div>
-        <div class="kpi"><div class="v">${fmt(plan.L)} m</div><div class="l">Lengde (fra kartet)</div></div>
+        <div class="kpi"><div class="v">${h.ref ?? state.idx + 1}</div><div class="l">Hull · par ${h.par}${h.hcp ? ' · hcp ' + h.hcp : ''}</div></div>
+        <div class="kpi"><div class="v">${fmt(plan.L)} m</div><div class="l">Lengde på kartet</div></div>
+        <div class="kpi"><div class="v">${fmt(plan.plPin)} m</div><div class="l">Spiller som${dzHole !== null ? ` (${dzHole > 0 ? '+' : ''}${fmt(dzHole)} m)` : ''}</div></div>
       </div>
-      <div class="row small" style="margin-top:8px"><span class="muted">Utslag:</span>
+      <div class="row small" style="margin-top:10px"><span class="muted">Utslag:</span>
         <div class="seg" id="ts">${[[0, 'Som kartet'], [20, '20 m frem'], [40, '40 m frem']].map(([v, l]) => `<button data-v="${v}" class="${state.teeShift === v ? 'on' : ''}">${l}</button>`).join('')}</div></div>
       <div id="map"></div>
       <div class="card" id="opts"></div>
+      ${prof ? `<div class="card"><div class="row"><b>Høydeprofil</b><span class="spacer"></span><span class="small muted">${esc(state.course.elev?.src || '')}</span></div>${profileSvg(prof, fmt)}</div>`
+        : `<div class="card warn small">Mangler høydedata for denne banen. Lengdene er ikke justert for opp- og nedoverbakke. Trykk «Hent på nytt» nederst.</div>`}
       ${haz.length ? `<div class="card"><b>Hindre</b><ul class="list">${haz.map((z) => `<li class="small">${K_NAME[z.k]} ${z.side === 'over' ? 'tvers over' : z.side} · ${z.s0}–${z.s1} m fra utslag${z.side === 'over' ? ` · <b>carry ${z.s1} m</b> for å gå over` : ` · ${z.gap} m fra midtlinjen`}</li>`).join('')}</ul></div>` : ''}
-      ${thin ? `<div class="card warn small">Få detaljer er tegnet for dette hullet i OpenStreetMap (ingen fairway, bunkere eller vann). Forslaget bygger mest på lengden.</div>` : ''}
-      <p class="small muted">Beregnet med ${N_SAMPLES} simulerte slag per kølle, fra dine TrackMan-data siste 12 måneder. Simulatorlengder kan avvike fra lengdene ute, særlig i kulde og vind. Kartdata © OpenStreetMap-bidragsytere.</p>`;
+      ${thin ? `<div class="card warn small">Få detaljer er tegnet for dette hullet i OpenStreetMap (ingen fairway, bunkere eller vann). Forslaget bygger mest på lengde og spredning.</div>` : ''}
+      <details class="card" id="setbox"><summary>Din strategi og forutsetninger</summary>
+        <label>Ønsket innspill på par 4 og par 5 (meter, spiller som)</label>
+        <div class="row"><input type="number" id="wmin" value="${set.winMin}" style="width:90px"> – <input type="number" id="wmax" value="${set.winMax}" style="width:90px"></div>
+        <label>Terreng utenfor fairway og rough når det ikke er tegnet på kartet</label>
+        <div class="seg" id="offf">${[['skog', 'Skog / out'], ['åpent', 'Åpent']].map(([v, l]) => `<button data-v="${v}" class="${set.offFairway === v ? 'on' : ''}">${l}</button>`).join('')}</div>
+        <label>Risiko</label>
+        <div class="seg" id="risk">${[['forsiktig', 'Forsiktig'], ['nøytral', 'Nøytral']].map(([v, l]) => `<button data-v="${v}" class="${set.risk === v ? 'on' : ''}">${l}</button>`).join('')}</div>
+        <label>Ekstra spredning ute i forhold til simulatoren</label>
+        <div class="seg" id="infl">${[[1, 'Ingen'], [1.15, '+15 %'], [1.3, '+30 %']].map(([v, l]) => `<button data-v="${v}" class="${set.sideInflate === v ? 'on' : ''}">${l}</button>`).join('')}</div>
+        <div class="row" style="margin-top:12px"><button class="btn sm" id="refetch">Hent banedata på nytt</button></div>
+      </details>
+      <p class="small muted">Hver kølle er testet med ${N_SAMPLES} simulerte slag med din lengde og spredning (siste 12 måneder), korrigert for høydeforskjell. Poengsummen er forventet antall slag på hullet, pluss et tillegg når innspillet havner utenfor ${set.winMin}–${set.winMax} m${set.risk === 'forsiktig' ? ', og et tillegg for risiko (skog, vann, out og bunker)' : ''}. Kartdata © OpenStreetMap-bidragsytere.</p>`;
     view.querySelector('#hn').onclick = (e) => { const i = e.target.dataset.i; if (i !== undefined) { state.idx = +i; renderHole(); } };
     view.querySelector('#ts').onclick = (e) => { const v = e.target.dataset.v; if (v !== undefined) { state.teeShift = +v; renderHole(); } };
     view.querySelector('#chg').onclick = () => { state.course = null; renderSearch(); };
-    drawOptions();
+    const upd = (patch) => { saveSettings({ ...getSettings(), ...patch }); renderHole(); view.querySelector('#setbox').open = true; };
+    view.querySelector('#wmin').onchange = (e) => { const v = +e.target.value; if (v > 30 && v < 250) upd({ winMin: v, winMax: Math.max(v + 5, getSettings().winMax) }); };
+    view.querySelector('#wmax').onchange = (e) => { const v = +e.target.value; if (v > 30 && v < 260) upd({ winMax: v, winMin: Math.min(v - 5, getSettings().winMin) }); };
+    view.querySelector('#offf').onclick = (e) => { const v = e.target.dataset.v; if (v) upd({ offFairway: v }); };
+    view.querySelector('#risk').onclick = (e) => { const v = e.target.dataset.v; if (v) upd({ risk: v }); };
+    view.querySelector('#infl').onclick = (e) => { const v = e.target.dataset.v; if (v) upd({ sideInflate: +v }); };
+    view.querySelector('#refetch').onclick = async () => {
+      const c = state.course; const src = (ls.get(LS_RECENT) || []).find((r) => r.id === c.id) || { id: c.id, osm_type: c.id[0] === 'r' ? 'relation' : 'way', osm_id: +c.id.slice(1), name: c.name, place: c.place, lat: c.lat, lon: c.lon };
+      view.innerHTML = `<div class="loading">Henter ${esc(c.name)} på nytt…</div>`;
+      try { const data = await loadCourse(src, true); Object.assign(state, { course: data, holes: buildHoles(data) }); renderHole(); } catch (err) { toast(err.message); renderHole(); }
+    };
+    drawOptions(set);
     drawMap();
   }
 
-  function drawOptions() {
+  function drawOptions(set) {
     const box = view.querySelector('#opts');
     const { opts } = state.plan;
+    const h = state.holes[state.idx];
     if (!opts.length) { box.innerHTML = `<div class="muted">Ingen kølle i bagen passer lengden på dette hullet.</div>`; return; }
     const best = opts[0];
-    const aimTxt = (o) => Math.abs(o.aimOff) < 1 ? 'midt i' : `${Math.abs(o.aimOff)} m ${o.aimOff < 0 ? 'venstre' : 'høyre'} for midten`;
-    const par3 = state.holes[state.idx].par === 3;
-    const bar = (p) => `<div class="meter" aria-hidden="true">${['fairway', 'green', 'rough', 'bunker', 'trees', 'water'].map((k) => p[k] ? `<i style="width:${p[k] * 100}%;background:${LIE_COLOR[k]}"></i>` : '').join('')}</div>`;
+    const aimTxt = (o) => Math.abs(o.aimOff) < 1 ? 'midt i fairway' : `${Math.abs(o.aimOff)} m ${o.aimOff < 0 ? 'venstre' : 'høyre'} for midten`;
+    const par3 = h.par === 3, par5 = h.par === 5;
+    const bar = (p) => `<div class="meter" aria-hidden="true">${['fairway', 'green', 'rough', 'bunker', 'trees', 'water', 'oob'].map((k) => p[k] ? `<i style="width:${p[k] * 100}%;background:${LIE_COLOR[k]}"></i>` : '').join('')}</div>`;
+    // corridor at the landing zone of the best club vs its spread
+    const landS = Math.min(h.len, state.teeShift + (+best.club.total_p50 || +best.club.carry_p50));
+    const cor = corridorAt(h, landS);
+    const width = cor ? cor.hi - cor.lo : null;
+    const spread = Math.round(sideSd(best.club, set) * 1.2816);
+    const planTxt = (o) => par3 ? `${esc(o.club.club)} mot green`
+      : par5 && o.second ? `${esc(short(o.club.club))} → ${o.second.go ? 'gå for green med ' : ''}${esc(short(o.second.club))}${o.second.go ? '' : ` → ${fmt(o.remaining)} m inn`}`
+      : `${esc(short(o.club.club))} → ${fmt(o.remaining)} m inn`;
     box.innerHTML = `<div class="tip-card"><div class="club-badge" style="background:${catVar(best.club.category)}">${esc(best.club.club.replace('Pitching Wedge', 'PW')).replace(' ', '<br>')}</div>
       <div><div class="small muted">Anbefalt fra tee</div><div style="font-size:18px;font-weight:750">${esc(best.club.club)}, sikt ${aimTxt(best)}</div>
-      <div class="small muted" style="margin-top:2px">${par3 ? `Treffer green ${Math.round(best.p.green * 100)} %` : `Fairway ${Math.round(best.p.fairway * 100)} %`}${best.p.water > 0.01 ? ` · vann ${Math.round(best.p.water * 100)} %` : ''}${par3 ? '' : ` · igjen ca. ${fmt(best.remaining)} m`}</div></div></div>
-      <div class="legend" style="margin-top:12px">${[['fairway', 'Fairway'], ['green', 'Green'], ['rough', 'Rough'], ['bunker', 'Bunker'], ['trees', 'Skog/utenfor'], ['water', 'Vann']].map(([k, l]) => `<span><i style="background:${LIE_COLOR[k]}"></i>${l}</span>`).join('')}</div>` +
+      <div class="small" style="margin-top:2px">${planTxt(best)}</div>
+      <div class="small muted" style="margin-top:2px">${par3 ? `Treffer green ${Math.round(best.p.green * 100)} %` : `Fairway ${Math.round(best.p.fairway * 100)} % · i innspillsvinduet ${Math.round(best.inWin * 100)} %`}${best.p.water + best.p.oob > 0.01 ? ` · straff ${Math.round((best.p.water + best.p.oob) * 100)} %` : ''}</div>
+      ${!par3 ? `<div class="small muted">${width !== null ? `Fairway ca. ${fmt(width)} m bred der ballen lander` : 'Fairwaybredde ikke tegnet her'} · din spredning ±${spread} m</div>` : ''}</div></div>
+      <div class="legend" style="margin-top:12px">${[['fairway', 'Fairway'], ['green', 'Green'], ['rough', 'Rough'], ['bunker', 'Bunker'], ['trees', 'Skog'], ['water', 'Vann'], ['oob', 'Out/tapt']].map(([k, l]) => `<span><i style="background:${LIE_COLOR[k]}"></i>${l}</span>`).join('')}</div>` +
       opts.slice(0, 5).map((o, i) => `<div class="opt ${i === 0 ? 'best' : ''}" data-o="${i}" style="cursor:pointer">
-        <div class="oname">${esc(o.club.club)}</div><div class="num small">${i === 0 ? 'forventet ' + fmt(o.exp, 2) + ' slag' : (o.exp - best.exp < 0.04 ? 'omtrent like bra' : '+' + fmt(o.exp - best.exp, 2) + ' slag')}</div>
-        <div class="ometa">${bar(o.p)}<div style="margin-top:4px">${par3 ? `Green ${Math.round(o.p.green * 100)} %` : `Fairway ${Math.round(o.p.fairway * 100)} %`}
-          · rough ${Math.round(o.p.rough * 100)} %${o.p.bunker > 0.01 ? ` · bunker ${Math.round(o.p.bunker * 100)} %` : ''}${o.p.trees > 0.01 ? ` · skog/utenfor ${Math.round(o.p.trees * 100)} %` : ''}${o.p.water > 0.01 ? ` · <b>vann ${Math.round(o.p.water * 100)} %</b>` : ''}
-          ${par3 ? '' : ` · igjen ${fmt(o.remaining)} m`} · sikt ${aimTxt(o)}</div></div></div>`).join('') +
-      `<div class="small muted" style="margin-top:6px">Trykk på en kølle for å se spredningen på kartet. «Forventet slag» er gjennomsnittlig antall slag på hullet med den køllen fra tee.</div>`;
+        <div class="oname">${esc(o.club.club)}</div><div class="num small">${i === 0 ? 'poeng ' + fmt(o.score, 2) : (o.score - best.score < 0.04 ? 'omtrent like bra' : '+' + fmt(o.score - best.score, 2))}</div>
+        <div class="ometa">${bar(o.p)}<div style="margin-top:4px">${planTxt(o)} · sikt ${aimTxt(o)}</div>
+        <div>${par3 ? `Green ${Math.round(o.p.green * 100)} %` : `Fairway ${Math.round(o.p.fairway * 100)} % · vindu ${Math.round(o.inWin * 100)} %`}
+          · rough ${Math.round(o.p.rough * 100)} %${o.p.bunker > 0.01 ? ` · bunker ${Math.round(o.p.bunker * 100)} %` : ''}${o.p.trees > 0.01 ? ` · skog ${Math.round(o.p.trees * 100)} %` : ''}${o.p.water > 0.01 ? ` · <b>vann ${Math.round(o.p.water * 100)} %</b>` : ''}${o.p.oob > 0.01 ? ` · <b>out ${Math.round(o.p.oob * 100)} %</b>` : ''}
+          · spredning ±${Math.round(sideSd(o.club, set) * 1.2816)} m</div></div></div>`).join('') +
+      `<div class="small muted" style="margin-top:6px">Trykk på en kølle for å se spredningen på kartet${par5 ? ' (små prikker: utslag, ringer: andreslag)' : ''}. Lavest poeng er best.</div>`;
     box.querySelectorAll('[data-o]').forEach((el) => el.onclick = () => { state.sel = +el.dataset.o; drawDots(); });
   }
 
@@ -445,10 +642,12 @@ export async function renderStrategy(view, ctx) {
     const ll = (p) => { const g = P.from(p); return [g.lat, g.lon]; };
     state.layers.clearLayers();
     L.polyline([ll(state.plan.start), ll(o.target)], { color: '#f2c94c', weight: 2 }).addTo(state.layers);
+    if (o.lay) L.circleMarker(ll(o.lay.p), { radius: 7, color: '#f2c94c', weight: 2, fillOpacity: 0 }).addTo(state.layers);
     for (const d of o.dots) L.circleMarker(ll(d), { radius: 2.5, weight: 0, fillOpacity: .9, fillColor: LIE_COLOR[d.label] || '#fff' }).addTo(state.layers);
+    for (const d of o.dots2 || []) L.circleMarker(ll(d), { radius: 3, weight: 1.5, color: LIE_COLOR[d.label] || '#fff', fillOpacity: 0 }).addTo(state.layers);
     view.querySelectorAll('.opt').forEach((el) => el.style.background = +el.dataset.o === state.sel ? 'var(--accent-soft)' : '');
   }
 }
 
 // exported for tests
-export const _internals = { projector, polyLen, pointAt, project, inPoly, buildHoles, planHole, hazardsOf, carryQuantile, E };
+export const _internals = { projector, polyLen, pointAt, project, inPoly, buildHoles, planHole, hazardsOf, carryQuantile, E, elevAt, playsLike, getSettings };

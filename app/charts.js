@@ -21,7 +21,7 @@ export function showTip(html, x, y) {
   t.style.top = Math.max(8, y - h - 12) + 'px';
 }
 export function hideTip() { if (tipEl) tipEl.hidden = true; }
-document.addEventListener('scroll', hideTip, { passive: true });
+if (typeof document !== 'undefined') document.addEventListener('scroll', hideTip, { passive: true });
 
 // ------------------------------------------------------------------ trend line (to-par per round + rolling average)
 export function trendChart(el, rounds, { height = 170, rolling = 5, compact = false } = {}) {
