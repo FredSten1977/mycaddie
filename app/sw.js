@@ -1,5 +1,5 @@
 // My Caddie service worker: app shell works offline; data calls always go to the network.
-const CACHE = 'mycaddie-v4';
+const CACHE = 'mycaddie-v5';
 const SHELL = ['./', 'index.html', 'styles.css', 'app.js', 'config.js', 'recommend.js', 'strategy.js', 'charts.js', 'manifest.webmanifest', 'icon-192.png'];
 self.addEventListener('install', (e) => { e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting())); });
 self.addEventListener('activate', (e) => { e.waitUntil(caches.keys().then((ks) => Promise.all(ks.filter((k) => k !== CACHE).map((k) => caches.delete(k)))).then(() => self.clients.claim())); });
@@ -13,7 +13,7 @@ self.addEventListener('fetch', (e) => {
   e.respondWith((async () => {
     const cache = await caches.open(CACHE);
     if (sameOrigin) { // network first so updates show up at once
-      try { const r = await fetch(e.request); if (r.ok) cache.put(e.request, r.clone()); return r; }
+      try { const r = await fetch(e.request, { cache: 'no-cache' }); if (r.ok) cache.put(e.request, r.clone()); return r; }
       catch { return (await cache.match(e.request)) || Response.error(); }
     }
     const hit = await cache.match(e.request); if (hit) return hit; // cache first for CDN and map tiles
