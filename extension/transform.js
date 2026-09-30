@@ -1,7 +1,7 @@
 // My Caddie Sync – TrackMan GraphQL activity → public.sync_import(jsonb) payload.
 // Pure functions: loaded by the extension service worker and by Node tests.
 (function (root) {
-  const PARSER_VERSION = 'tm-api-v2';
+  const PARSER_VERSION = 'tm-api-v3';
 
   const KIND_TO_ACTIVITY = {
     SESSION: 'practice', SHOT_ANALYSIS: 'practice', VIRTUAL_RANGE: 'practice', RANGE_PRACTICE: 'practice',
@@ -26,7 +26,14 @@
 ${STROKE_TYPES.map((t) => `  ... on ${t} { id time kind strokes { time club targetDistance measurement { ${MEAS_FIELDS} } } }`).join('\n')}
 } }`;
 
-  const Q_COURSE = `query MyCaddieCourse($id: ID!) { node(id: $id) { __typename
+  // Every player's scorecard in the same game (used for matchplay: the opponent's holes and strokes)
+  const PLAYERS = `playersScorecards { courseHcp totalHcpStrokes grossScore netScore numberOfHolesPlayed isCompleted teeName
+        player { name hcp courseHcp tee isGuest }
+        holes { holeNumber isPlayed par strokeIndex grossScore hcpStrokes matchScore } }`;
+  const SHOTS_FULL = `shots { shotNumber club launchLie finalLie launchTime total shotResult shotsToAdd
+          measurement(shotMeasurementKind: MEASUREMENT) { ${MEAS_FIELDS} distanceFromPin targetDistance } }`;
+  const SHOTS_LIGHT = 'shots { shotNumber finalLie }';   // enough to tell fairway hits; no club → no shots imported
+  const courseQuery = (shots, players) => `query MyCaddieCourse($id: ID!) { node(id: $id) { __typename
   ... on CoursePlayActivity { id time kind gameType grossScore netScore stablefordPoints toPar matchScore numberOfHolesToPlay
     gameSettings { gameScore handicapped }
     course { displayName }
@@ -34,10 +41,14 @@ ${STROKE_TYPES.map((t) => `  ... on ${t} { id time kind strokes { time club targ
       fairwayFirmness greenFirmness startedAt finishedAt courseHcp totalHcpStrokes
       player { name hcp courseHcp tee isGuest }
       participants { name hcp courseHcp tee isGuest }
+      ${players ? PLAYERS : ''}
       stat { driveAverage driveMax fairwayHitFairway fairwayHitLeft fairwayHitRight greenInRegulation scrambles numberOfPutts }
       holes { holeNumber isPlayed par distance strokeIndex grossScore putts greenInRegulation stablefordPoint hcpStrokes matchScore
-        shots { shotNumber club launchLie finalLie launchTime total shotResult shotsToAdd
-          measurement(shotMeasurementKind: MEASUREMENT) { ${MEAS_FIELDS} distanceFromPin targetDistance } } } } } } }`;
+        ${shots} } } } } }`;
+  const Q_COURSE = courseQuery(SHOTS_FULL, true);
+  const Q_COURSE_BASIC = courseQuery(SHOTS_FULL, false);       // fallback if playersScorecards is not available
+  const Q_COURSE_LIGHT = courseQuery(SHOTS_LIGHT, true);       // refresh of a known round (no shot data)
+  const Q_COURSE_LIGHT_BASIC = courseQuery(SHOTS_LIGHT, false);
 
   const n = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
   const mul = (v, f) => (n(v) === null ? null : Math.round(v * f * 1000) / 1000);
@@ -96,6 +107,17 @@ ${STROKE_TYPES.map((t) => `  ... on ${t} { id time kind strokes { time club targ
     };
   }
 
+  // One player's scorecard in a multi-player game (the opponent's side of a match)
+  function playerCard(p) {
+    const pl = p.player || {};
+    return { name: pl.name || null, hcp: n(pl.hcp), course_hcp: n(p.courseHcp) ?? n(pl.courseHcp), tee: pl.tee || p.teeName || null, guest: !!pl.isGuest,
+             gross: n(p.grossScore), net: n(p.netScore), holes_played: n(p.numberOfHolesPlayed), completed: p.isCompleted ?? null,
+             total_hcp_strokes: n(p.totalHcpStrokes),
+             holes: (p.holes || []).filter((h) => h && h.isPlayed !== false && h.grossScore != null).map((h) => ({
+               hole_no: h.holeNumber, par: h.par ?? null, stroke_index: h.strokeIndex ?? null, strokes: h.grossScore,
+               hcp_strokes: h.hcpStrokes ?? null, match_score: h.matchScore ?? null })) };
+  }
+
   // Course play: scorecard → round + holes + shots with lies and pin distances
   function coursePlayToPayload(summary, node) {
     const sc = (node && node.scorecard) || {};
@@ -147,14 +169,18 @@ ${STROKE_TYPES.map((t) => `  ... on ${t} { id time kind strokes { time club targ
       conditions: { greenStimp: sc.greenStimp ?? null, windMode: sc.windMode ?? null, fairwayFirmness: sc.fairwayFirmness ?? null,
                     greenFirmness: sc.greenFirmness ?? null, gameType: node.gameType ?? null, isCompleted: sc.isCompleted ?? null,
                     // handicap as registered on the TrackMan scorecard (used for matchplay)
-                    tm_meta_v: 2,
+                    tm_meta_v: 3,
                     tm_hcp: n(sc.player && sc.player.hcp),
                     tm_course_hcp: n(sc.courseHcp) ?? n(sc.player && sc.player.courseHcp),
                     tm_total_hcp_strokes: n(sc.totalHcpStrokes),
                     tm_game_score: (node.gameSettings && node.gameSettings.gameScore) || null,
                     tm_handicapped: node.gameSettings ? node.gameSettings.handicapped ?? null : null,
                     tm_net_score: n(sc.netScore) ?? n(node.netScore),
-                    tm_participants: (sc.participants || []).map((x) => ({ name: x.name || null, hcp: n(x.hcp), course_hcp: n(x.courseHcp), tee: x.tee || null, guest: !!x.isGuest })) },
+                    tm_participants: (sc.participants || []).map((x) => ({ name: x.name || null, hcp: n(x.hcp), course_hcp: n(x.courseHcp), tee: x.tee || null, guest: !!x.isGuest })),
+                    tm_player_name: (sc.player && sc.player.name) || null,
+                    tm_match_score: n(node.matchScore),
+                    tm_holes_to_play: n(node.numberOfHolesToPlay),
+                    ...(Array.isArray(sc.playersScorecards) && sc.playersScorecards.length ? { tm_players: sc.playersScorecards.map(playerCard) } : {}) },
       holes: roundHoles,
     } : null;
     return {
@@ -166,15 +192,19 @@ ${STROKE_TYPES.map((t) => `  ... on ${t} { id time kind strokes { time club targ
     };
   }
 
-  function queryFor(summary) {
-    if (summary.kind === 'COURSE_PLAY') return { query: Q_COURSE, variables: { id: summary.id } };
+  // light: a known round that only needs its scorecard refreshed. basic: without playersScorecards (fallback).
+  function queryFor(summary, { light = false, basic = false } = {}) {
+    if (summary.kind === 'COURSE_PLAY') {
+      const q = light ? (basic ? Q_COURSE_LIGHT_BASIC : Q_COURSE_LIGHT) : (basic ? Q_COURSE_BASIC : Q_COURSE);
+      return { query: q, variables: { id: summary.id } };
+    }
     return { query: Q_STROKES, variables: { id: summary.id } };
   }
   function toPayload(summary, node) {
     return summary.kind === 'COURSE_PLAY' ? coursePlayToPayload(summary, node) : strokesActivityToPayload(summary, node);
   }
 
-  const api = { PARSER_VERSION, SUPPORTED_KINDS, KIND_TO_ACTIVITY, Q_LIST, Q_STROKES, Q_COURSE, queryFor, toPayload,
-                strokesActivityToPayload, coursePlayToPayload };
+  const api = { PARSER_VERSION, SUPPORTED_KINDS, KIND_TO_ACTIVITY, Q_LIST, Q_STROKES, Q_COURSE, Q_COURSE_BASIC, Q_COURSE_LIGHT, queryFor, toPayload,
+                strokesActivityToPayload, coursePlayToPayload, playerCard };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.MyCaddieTransform = api;
 })(typeof self !== 'undefined' ? self : globalThis);

@@ -197,7 +197,7 @@ async function renderHome() {
       <div style="font-family:var(--serif);font-size:24px;font-weight:700;margin:4px 0 6px">Kom i gang med My Caddie</div>
       <div class="sub">Appen fylles av seg selv fra TrackMan når utvidelsen er installert.</div></section>
     <div class="card"><ol style="margin:0;padding-left:20px;line-height:1.6">
-      <li><a href="my-caddie-sync.zip" download>Last ned My Caddie Sync</a> (Chrome-utvidelse) og pakk ut zip-filen til en fast mappe.</li>
+      <li><a href="my-caddie-sync.zip?v=040" download>Last ned My Caddie Sync</a> (Chrome-utvidelse) og pakk ut zip-filen til en fast mappe.</li>
       <li>I Chrome: gå til <b>chrome://extensions</b>, slå på <b>Utviklermodus</b>, klikk <b>Last inn upakket</b> og velg mappen.</li>
       <li>Klikk på utvidelsen og logg inn med samme e-post og passord som her.</li>
       <li>Vær innlogget i <a href="https://portal.trackmangolf.com" target="_blank" rel="noopener">TrackMan Portal</a> i Chrome, og trykk <b>Synk nå</b>. Første gang tar det noen minutter.</li>
@@ -598,7 +598,7 @@ async function renderMatchplay() {
     <div style="font-family:var(--serif);font-size:24px;font-weight:700;margin:4px 0 2px">${esc(names.p1)} mot ${esc(names.p2)}</div>
     <div class="sub">${matches.length ? (leader ? `${esc(leader.name)} leder med ${signed(leader.pm, 0)} etter ${matches.length} ${matches.length === 1 ? 'runde' : 'runder'}` : `Helt likt etter ${matches.length} ${matches.length === 1 ? 'runde' : 'runder'}`) : 'Ingen matcher registrert ennå'}</div>
     ${series.length > 1 ? `<div id="mpchart" style="margin-top:10px"></div>` : ''}</section>
-  ${matches.some((m) => m.auto && (m.p1_hcp === null || m.p2_hcp === null)) ? `<div class="card warn small">Noen matcher er regnet <b>brutto</b> fordi hcp ikke er hentet fra TrackMan ennå. Oppdater Chrome-utvidelsen til versjon 0.3.0 og synk, så hentes hcp fra scorekortene og matchene regnes om.</div>` : ''}
+  ${matches.some((m) => m.auto && (m.p1_hcp === null || m.p2_hcp === null)) ? `<div class="card warn small">Noen matcher er regnet <b>brutto</b> fordi hcp ikke er hentet fra TrackMan ennå. Oppdater Chrome-utvidelsen til versjon 0.4.0 og synk, så hentes hcp fra scorekortene og matchene regnes om.</div>` : ''}
   <div class="card"><table class="t mp"><thead><tr><th>Spiller</th><th>Runder</th><th>Seier</th><th>Delt</th><th>Tap</th><th>+/− netto</th><th>+/− brutto</th></tr></thead><tbody>
     ${rows.map((r) => `<tr><td><b>${esc(r.name)}</b></td><td>${r.n}</td><td>${r.w}</td><td>${r.d}</td><td>${r.l}</td>
       <td><b class="${r.pm > 0 ? 'neg' : r.pm < 0 ? 'pos' : ''}">${r.pm > 0 ? '+' : ''}${r.pm}</b></td>

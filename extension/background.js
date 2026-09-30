@@ -68,13 +68,33 @@ async function portalReady(tabId, timeoutMs = 25000) {
   }
   throw new Error('Fikk ikke kontakt med TrackMan Portal. Last portalen på nytt og prøv igjen.');
 }
-async function gql(tabId, query, variables) {
+async function gqlBody(tabId, query, variables) {
   const res = await chrome.tabs.sendMessage(tabId, { type: 'mc-gql', query, variables });
   if (!res) throw new Error('Ingen svar fra portalfanen');
   if (res.error) throw new Error(res.error === 'not_ready' ? 'Portalen er ikke klar ennå' : res.error);
   const b = res.body || {};
   if (b.errors && b.errors.length && !b.data) throw new Error(b.errors.map((e) => e.message).join('; '));
-  return b.data;
+  return b;
+}
+async function gql(tabId, query, variables) { return (await gqlBody(tabId, query, variables)).data; }
+
+// Course rounds: ask for every player's scorecard; if TrackMan refuses that part, ask again without it.
+let playersSupported = true;
+async function fetchActivity(tabId, a, light) {
+  if (a.kind === 'COURSE_PLAY' && playersSupported) {
+    const q = T.queryFor(a, { light });
+    try {
+      const b = await gqlBody(tabId, q.query, q.variables);
+      const node = b.data && b.data.node;
+      const failed = (b.errors || []).some((e) => /playersScorecards/i.test(JSON.stringify(e)));
+      if (!failed) return node;
+    } catch (e) { if (!/playersScorecards/i.test(e.message)) throw e; }
+    playersSupported = false;
+    await progress('TrackMan ga ikke motspillerens scorekort – henter uten det', 'warn');
+  }
+  const q = T.queryFor(a, { light, basic: true });
+  const d = await gql(tabId, q.query, q.variables);
+  return d && d.node;
 }
 async function listActivities(tabId) {
   const all = []; let skip = 0;
@@ -93,21 +113,27 @@ async function listActivities(tabId) {
 async function plan(tabId) {
   const acts = await listActivities(tabId);
   const known = new Set(await rpc('sync_known_activities'));
+  // known course rounds whose scorecard should be read again (without shots), e.g. to learn who played
+  const refresh = new Set(await rpc('sync_refresh_activities').catch(() => []));
   const byKind = {};
   const todo = [];
+  let nRefresh = 0;
   for (const a of acts) {
     const supported = T.SUPPORTED_KINDS.includes(a.kind);
     const k = byKind[a.kind] || (byKind[a.kind] = { total: 0, new: 0, supported });
     k.total++;
-    if (supported && !known.has(a.id)) { k.new++; todo.push(a); }
+    if (!supported) continue;
+    if (!known.has(a.id)) { k.new++; todo.push(a); }
+    else if (a.kind === 'COURSE_PLAY' && refresh.has(a.id)) { nRefresh++; todo.push({ ...a, light: true }); }
   }
   todo.sort((x, y) => String(x.time).localeCompare(String(y.time)));
-  return { total: acts.length, byKind, todo, oldest: acts.map((a) => a.time).sort()[0] || null };
+  return { total: acts.length, byKind, todo, nRefresh, oldest: acts.map((a) => a.time).sort()[0] || null };
 }
 
 async function run({ preview = false, auto = false } = {}) {
   if (running) return { error: 'En synk kjører allerede' };
   running = true;
+  playersSupported = true;
   let opened = null;
   try {
     await session();
@@ -116,16 +142,16 @@ async function run({ preview = false, auto = false } = {}) {
     await progress(auto ? 'Automatisk synk startet' : preview ? 'Sjekker hva som er nytt …' : 'Synk startet');
     await portalReady(pt.tab.id);
     const p = await plan(pt.tab.id);
-    await progress(`Fant ${p.total} aktiviteter i TrackMan (eldste ${p.oldest ? p.oldest.slice(0, 10) : '–'}). ${p.todo.length} er nye.`);
+    await progress(`Fant ${p.total} aktiviteter i TrackMan (eldste ${p.oldest ? p.oldest.slice(0, 10) : '–'}). ${p.todo.length - p.nRefresh} er nye` +
+                   (p.nRefresh ? `, ${p.nRefresh} runder oppdateres.` : '.'));
     if (preview) { await setState({ preview: { at: new Date().toISOString(), total: p.total, byKind: p.byKind, todo: p.todo.length } }); return { ok: true, preview: p.byKind, todo: p.todo.length }; }
 
     let nSess = 0, nShots = 0, nRounds = 0, nSuperseded = 0, failed = 0; const unknownClubs = new Set();
     for (let i = 0; i < p.todo.length; i++) {
       const a = p.todo[i];
       try {
-        const q = T.queryFor(a);
-        const d = await gql(pt.tab.id, q.query, q.variables);
-        const payload = T.toPayload(a, d && d.node);
+        const node = await fetchActivity(pt.tab.id, a, !!a.light);
+        const payload = T.toPayload(a, node);
         const r = await rpc('sync_import', { p: payload });
         nSess += r.sessions_new; nShots += r.shots_new; if (r.round_new) nRounds++; nSuperseded += r.legacy_rounds_superseded || 0;
         (r.unknown_clubs || []).forEach((c) => unknownClubs.add(c));
@@ -134,7 +160,7 @@ async function run({ preview = false, auto = false } = {}) {
         failed++; await progress(`${a.kind} ${String(a.time).slice(0, 10)}: ${e.message}`, 'error');
         if (/Ikke logget inn|JWT|not allowed/i.test(e.message)) break;
       }
-      await sleep(300);
+      await sleep(a.light ? 150 : 300);
     }
     const last = { at: new Date().toISOString(), activities: p.todo.length, sessions: nSess, shots: nShots, rounds: nRounds,
                    superseded: nSuperseded, failed, unknownClubs: [...unknownClubs] };
