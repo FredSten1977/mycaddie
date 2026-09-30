@@ -704,6 +704,13 @@ async function renderProfile() {
         <div class="small muted" style="margin-top:6px">Matchplay bruker handicapet som står på TrackMan-scorekortet. Dette feltet er bare reserve for runder der TrackMan ikke har hcp. Full differanse gis på hullene med lavest slagindeks.</div>
         <div class="row" style="margin-top:14px"><button class="btn primary" type="submit">Lagre</button><span id="pfe" class="small" style="color:var(--bad)"></span></div></form></div>
     ${hist.length ? `<div class="card"><h3 style="margin-top:0">Hcp-historikk</h3><ul class="list">${hist.map((h) => `<li class="row"><span>${dateNo(h.valid_from)}</span><span class="spacer"></span><b class="num">${hcp(h.hcp_index)}</b></li>`).join('')}</ul></div>` : ''}
+    <div class="card"><h3 style="margin-top:0">Chrome-utvidelse</h3>
+      <div class="small muted">My Caddie Sync henter rundene og slagene dine fra TrackMan. Nyeste versjon: 0.4.0.</div>
+      <div class="row" style="margin-top:12px"><a class="btn primary" href="my-caddie-sync.zip?v=040" download>Last ned My Caddie Sync</a></div>
+      <ol class="small" style="margin:12px 0 0;padding-left:18px">
+        <li>Pakk ut zip-filen til en fast mappe (erstatt den gamle).</li>
+        <li>Åpne <b>chrome://extensions</b>, slå på «Utviklermodus», fjern den gamle utvidelsen og velg «Last inn upakket» på mappen.</li>
+        <li>Sjekk at versjonen er 0.4.0, og trykk «Synk nå».</li></ol></div>
     <div class="row" style="margin:16px 0"><button class="btn" id="logout">Logg ut</button></div>`;
   $view.querySelector('#pf').addEventListener('submit', async (e) => {
     e.preventDefault();
