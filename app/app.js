@@ -533,7 +533,9 @@ async function renderReview() {
 const MP_KEY = 'mc_match_names';
 function mpNames() { try { return { p1: 'Fredrik', p2: 'Jimmy', ...(JSON.parse(localStorage.getItem(MP_KEY)) || {}) }; } catch { return { p1: 'Fredrik', p2: 'Jimmy' }; } }
 function mpSaveNames(n) { try { localStorage.setItem(MP_KEY, JSON.stringify(n)); } catch { /* private mode */ } }
-const mpResult = (m) => m.winner === 0 ? 'Delt' : m.remaining ? `${m.margin}&${m.remaining}` : `${m.margin} opp`;
+const mpUnfinished = (m) => /Ikke fullført: stilling etter (\d+)/.exec(m.note || '');
+const mpResult = (m) => { const u = mpUnfinished(m); if (u) return m.winner === 0 ? `AS etter ${u[1]}` : `${m.margin} opp etter ${u[1]}`;
+  return m.winner === 0 ? 'Delt' : m.remaining ? `${m.margin}&${m.remaining}` : `${m.margin} opp`; };
 // Gross matchplay (no strokes) from the hole-by-hole scores; null when there is no hole data (manual matches)
 function grossOf(m) {
   if (!Array.isArray(m.holes) || !m.holes.length) return null;
