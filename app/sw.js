@@ -1,5 +1,5 @@
 // My Caddie service worker: app shell works offline; data calls always go to the network.
-const CACHE = 'mycaddie-v13';
+const CACHE = 'mycaddie-v14';
 const SHELL = ['./', 'index.html', 'styles.css', 'app.js', 'config.js', 'recommend.js', 'strategy.js', 'charts.js', 'manifest.webmanifest', 'icon-192.png', 'logo.svg', 'favicon-64.png'];
 self.addEventListener('install', (e) => { e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting())); });
 self.addEventListener('activate', (e) => { e.waitUntil(caches.keys().then((ks) => Promise.all(ks.filter((k) => k !== CACHE).map((k) => caches.delete(k)))).then(() => self.clients.claim())); });

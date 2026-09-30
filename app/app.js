@@ -582,7 +582,7 @@ async function renderMatchplay() {
     <div style="font-family:var(--serif);font-size:24px;font-weight:700;margin:4px 0 2px">${esc(names.p1)} mot ${esc(names.p2)}</div>
     <div class="sub">${matches.length ? (leader ? `${esc(leader.name)} leder med ${signed(leader.pm, 0)} etter ${matches.length} ${matches.length === 1 ? 'runde' : 'runder'}` : `Helt likt etter ${matches.length} ${matches.length === 1 ? 'runde' : 'runder'}`) : 'Ingen matcher registrert ennå'}</div>
     ${series.length > 1 ? `<div id="mpchart" style="margin-top:10px"></div>` : ''}</section>
-  ${matches.some((m) => m.auto && (m.p1_hcp === null || m.p2_hcp === null)) ? `<div class="card warn small">Noen matcher er regnet <b>brutto</b> fordi hcp mangler. Legg inn hcp-indeksen din under <a href="#/profil">Profil</a> (og be motstanderen gjøre det samme), så regnes alle matchene om med full differanse.</div>` : ''}
+  ${matches.some((m) => m.auto && (m.p1_hcp === null || m.p2_hcp === null)) ? `<div class="card warn small">Noen matcher er regnet <b>brutto</b> fordi hcp ikke er hentet fra TrackMan ennå. Oppdater Chrome-utvidelsen til versjon 0.3.0 og synk, så hentes hcp fra scorekortene og matchene regnes om.</div>` : ''}
   <div class="card"><table class="t mp"><thead><tr><th>Spiller</th><th>Runder</th><th>Seier</th><th>Delt</th><th>Tap</th><th>+/−</th></tr></thead><tbody>
     ${rows.map((r) => `<tr><td><b>${esc(r.name)}</b></td><td>${r.n}</td><td>${r.w}</td><td>${r.d}</td><td>${r.l}</td>
       <td><b class="${r.pm > 0 ? 'neg' : r.pm < 0 ? 'pos' : ''}">${r.pm > 0 ? '+' : ''}${r.pm}</b></td></tr>`).join('')}
@@ -683,7 +683,7 @@ async function renderProfile() {
       <form id="pf"><label for="pfn">Navn (vises i Matchplay)</label><input id="pfn" type="text" value="${esc(name)}" required>
         <div class="row" style="flex-wrap:nowrap"><div style="flex:1"><label for="pfh">Hcp-indeks</label><input id="pfh" type="number" step="0.1" min="-10" max="54" inputmode="decimal" value="${hist[0]?.hcp_index ?? ''}"></div>
         <div style="flex:1"><label for="pfd">Gjelder fra</label><input id="pfd" type="date" value="${today()}"></div></div>
-        <div class="small muted" style="margin-top:6px">Brukes i matchplay: appen regner spillehandicap fra hcp-indeksen og slope/course rating for teen dere spilte, og gir full differanse på hullene med lavest slagindeks. Matcher etter denne datoen regnes om.</div>
+        <div class="small muted" style="margin-top:6px">Matchplay bruker handicapet som står på TrackMan-scorekortet. Dette feltet er bare reserve for runder der TrackMan ikke har hcp. Full differanse gis på hullene med lavest slagindeks.</div>
         <div class="row" style="margin-top:14px"><button class="btn primary" type="submit">Lagre</button><span id="pfe" class="small" style="color:var(--bad)"></span></div></form></div>
     ${hist.length ? `<div class="card"><h3 style="margin-top:0">Hcp-historikk</h3><ul class="list">${hist.map((h) => `<li class="row"><span>${dateNo(h.valid_from)}</span><span class="spacer"></span><b class="num">${hcp(h.hcp_index)}</b></li>`).join('')}</ul></div>` : ''}
     <div class="row" style="margin:16px 0"><button class="btn" id="logout">Logg ut</button></div>`;

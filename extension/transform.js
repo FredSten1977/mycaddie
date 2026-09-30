@@ -1,7 +1,7 @@
 // My Caddie Sync – TrackMan GraphQL activity → public.sync_import(jsonb) payload.
 // Pure functions: loaded by the extension service worker and by Node tests.
 (function (root) {
-  const PARSER_VERSION = 'tm-api-v1';
+  const PARSER_VERSION = 'tm-api-v2';
 
   const KIND_TO_ACTIVITY = {
     SESSION: 'practice', SHOT_ANALYSIS: 'practice', VIRTUAL_RANGE: 'practice', RANGE_PRACTICE: 'practice',
@@ -27,12 +27,15 @@ ${STROKE_TYPES.map((t) => `  ... on ${t} { id time kind strokes { time club targ
 } }`;
 
   const Q_COURSE = `query MyCaddieCourse($id: ID!) { node(id: $id) { __typename
-  ... on CoursePlayActivity { id time kind gameType grossScore stablefordPoints toPar numberOfHolesToPlay
+  ... on CoursePlayActivity { id time kind gameType grossScore netScore stablefordPoints toPar matchScore numberOfHolesToPlay
+    gameSettings { gameScore handicapped }
     course { displayName }
-    scorecard { par grossScore stablefordPoints numberOfHolesPlayed isCompleted teeName greenStimp windMode
-      fairwayFirmness greenFirmness startedAt finishedAt
+    scorecard { par grossScore netScore stablefordPoints numberOfHolesPlayed isCompleted teeName greenStimp windMode
+      fairwayFirmness greenFirmness startedAt finishedAt courseHcp totalHcpStrokes
+      player { name hcp courseHcp tee isGuest }
+      participants { name hcp courseHcp tee isGuest }
       stat { driveAverage driveMax fairwayHitFairway fairwayHitLeft fairwayHitRight greenInRegulation scrambles numberOfPutts }
-      holes { holeNumber isPlayed par distance strokeIndex grossScore putts greenInRegulation stablefordPoint
+      holes { holeNumber isPlayed par distance strokeIndex grossScore putts greenInRegulation stablefordPoint hcpStrokes matchScore
         shots { shotNumber club launchLie finalLie launchTime total shotResult shotsToAdd
           measurement(shotMeasurementKind: MEASUREMENT) { ${MEAS_FIELDS} distanceFromPin targetDistance } } } } } } }`;
 
@@ -122,7 +125,8 @@ ${STROKE_TYPES.map((t) => `  ... on ${t} { id time kind strokes { time club targ
       });
       return { hole_no: h.holeNumber, par: h.par ?? null, length_m: n(h.distance), stroke_index: h.strokeIndex ?? null,
                strokes: h.grossScore ?? null, putts: h.putts ?? null, fairway_hit: fairway,
-               gir: typeof h.greenInRegulation === 'boolean' ? h.greenInRegulation : null, stableford: h.stablefordPoint ?? null };
+               gir: typeof h.greenInRegulation === 'boolean' ? h.greenInRegulation : null, stableford: h.stablefordPoint ?? null,
+               hcp_strokes: h.hcpStrokes ?? null, match_score: h.matchScore ?? null };
     });
     const st = sc.stat || {};
     const firPossible = [st.fairwayHitFairway, st.fairwayHitLeft, st.fairwayHitRight].every((v) => typeof v === 'number')
@@ -141,7 +145,16 @@ ${STROKE_TYPES.map((t) => `  ... on ${t} { id time kind strokes { time club targ
       putts: typeof st.numberOfPutts === 'number' ? st.numberOfPutts : null,
       avg_drive_m: n(st.driveAverage), longest_drive_m: n(st.driveMax),
       conditions: { greenStimp: sc.greenStimp ?? null, windMode: sc.windMode ?? null, fairwayFirmness: sc.fairwayFirmness ?? null,
-                    greenFirmness: sc.greenFirmness ?? null, gameType: node.gameType ?? null, isCompleted: sc.isCompleted ?? null },
+                    greenFirmness: sc.greenFirmness ?? null, gameType: node.gameType ?? null, isCompleted: sc.isCompleted ?? null,
+                    // handicap as registered on the TrackMan scorecard (used for matchplay)
+                    tm_meta_v: 2,
+                    tm_hcp: n(sc.player && sc.player.hcp),
+                    tm_course_hcp: n(sc.courseHcp) ?? n(sc.player && sc.player.courseHcp),
+                    tm_total_hcp_strokes: n(sc.totalHcpStrokes),
+                    tm_game_score: (node.gameSettings && node.gameSettings.gameScore) || null,
+                    tm_handicapped: node.gameSettings ? node.gameSettings.handicapped ?? null : null,
+                    tm_net_score: n(sc.netScore) ?? n(node.netScore),
+                    tm_participants: (sc.participants || []).map((x) => ({ name: x.name || null, hcp: n(x.hcp), course_hcp: n(x.courseHcp), tee: x.tee || null, guest: !!x.isGuest })) },
       holes: roundHoles,
     } : null;
     return {
