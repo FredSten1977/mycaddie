@@ -538,6 +538,17 @@ const RESULTS = ['1 opp', '2 opp', '2&1', '3&1', '3&2', '4&2', '4&3', '5&3', '5&
 const lastWednesday = () => { const d = new Date(); const back = (d.getDay() - 3 + 7) % 7; d.setDate(d.getDate() - back); return d.toISOString().slice(0, 10); };
 const hcp = (v) => v === null || v === undefined ? '–' : Number(v).toLocaleString('nb-NO', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
 
+function holeTable(m) {
+  const cell = (g, st) => `${g ?? '–'}${st ? `<sup style="color:var(--gold-ink)">${'•'.repeat(st)}</sup>` : ''}`;
+  const status = (v) => v === 0 ? 'AS' : v > 0 ? `+${v}` : `−${-v}`;
+  return `<details style="margin-top:6px"><summary class="small">Hull for hull</summary><div style="overflow-x:auto"><table class="t" style="font-size:13px;margin-top:4px">
+    <thead><tr><th>Hull</th><th>Par</th><th>SI</th><th>${esc(m.p1_name)}</th><th>${esc(m.p2_name)}</th><th>${esc(m.p1_name)} +/−</th></tr></thead><tbody>
+    ${m.holes.map((x) => `<tr style="${x.counted === false ? 'opacity:.45' : ''}"><td>${x.hole}</td><td>${x.par ?? ''}</td><td>${x.si ?? ''}</td>
+      <td style="${x.res > 0 ? 'font-weight:700;color:var(--good)' : ''}">${cell(x.g1, x.s1)}</td><td style="${x.res < 0 ? 'font-weight:700;color:var(--good)' : ''}">${cell(x.g2, x.s2)}</td>
+      <td>${x.counted === false ? '' : status(x.status)}</td></tr>`).join('')}
+    </tbody></table></div><div class="small muted">• = tildelt slag på hullet. Grå hull ble spilt etter at matchen var avgjort.</div></details>`;
+}
+
 async function renderMatchplay() {
   $title.textContent = 'Matchplay';
   $view.innerHTML = `<div class="loading">Laster…</div>`;
@@ -571,6 +582,7 @@ async function renderMatchplay() {
     <div style="font-family:var(--serif);font-size:24px;font-weight:700;margin:4px 0 2px">${esc(names.p1)} mot ${esc(names.p2)}</div>
     <div class="sub">${matches.length ? (leader ? `${esc(leader.name)} leder med ${signed(leader.pm, 0)} etter ${matches.length} ${matches.length === 1 ? 'runde' : 'runder'}` : `Helt likt etter ${matches.length} ${matches.length === 1 ? 'runde' : 'runder'}`) : 'Ingen matcher registrert ennå'}</div>
     ${series.length > 1 ? `<div id="mpchart" style="margin-top:10px"></div>` : ''}</section>
+  ${matches.some((m) => m.auto && (m.p1_hcp === null || m.p2_hcp === null)) ? `<div class="card warn small">Noen matcher er regnet <b>brutto</b> fordi hcp mangler. Legg inn hcp-indeksen din under <a href="#/profil">Profil</a> (og be motstanderen gjøre det samme), så regnes alle matchene om med full differanse.</div>` : ''}
   <div class="card"><table class="t mp"><thead><tr><th>Spiller</th><th>Runder</th><th>Seier</th><th>Delt</th><th>Tap</th><th>+/−</th></tr></thead><tbody>
     ${rows.map((r) => `<tr><td><b>${esc(r.name)}</b></td><td>${r.n}</td><td>${r.w}</td><td>${r.d}</td><td>${r.l}</td>
       <td><b class="${r.pm > 0 ? 'neg' : r.pm < 0 ? 'pos' : ''}">${r.pm > 0 ? '+' : ''}${r.pm}</b></td></tr>`).join('')}
@@ -595,14 +607,19 @@ async function renderMatchplay() {
       <div class="row" style="margin-top:14px"><button class="btn primary" type="submit">Lagre match</button><span id="mperr" class="small" style="color:var(--bad)"></span></div>
     </form></details>
 
+  <div class="small muted" style="margin:8px 2px">Simulatormatcher på onsdager registreres automatisk når begge har synket runden fra TrackMan (samme bane, samme dag). Bruk skjemaet for matcher ute.
+    <button class="btn ghost sm" id="mpdetect">Se etter nye nå</button></div>
   <h2>Matcher</h2>
   ${matches.length ? `<div class="card"><ul class="list">${matches.map((m) => {
     const wname = m.winner === 1 ? m.p1_name : m.winner === 2 ? m.p2_name : null;
-    const mine = me && m.created_by === me.id;
+    const mine = me && m.created_by === me.id && !m.auto;
+    const given = m.p1_ch != null && m.p2_ch != null && m.p1_ch !== m.p2_ch
+      ? `${esc(m.p1_ch > m.p2_ch ? m.p1_name : m.p2_name)} fikk ${Math.abs(m.p1_ch - m.p2_ch)} slag` : '';
     return `<li><div class="row" style="flex-wrap:nowrap;align-items:flex-start">
-      <div style="flex:1;min-width:0"><div class="rtitle">${esc(m.course_name)}</div>
-        <div class="small muted">${dateNo(m.played_on)} · ${m.kind === 'simulator' ? 'Simulator' : 'Ute'} · hcp ${esc(m.p1_name)} ${hcp(m.p1_hcp)} / ${esc(m.p2_name)} ${hcp(m.p2_hcp)}${m.p1_hcp !== null && m.p2_hcp !== null ? ` (differanse ${hcp(Math.abs(m.p1_hcp - m.p2_hcp))})` : ''}</div>
+      <div style="flex:1;min-width:0"><div class="rtitle">${esc(m.course_name)} ${m.auto ? '<span class="chip">fra TrackMan</span>' : ''}</div>
+        <div class="small muted">${dateNo(m.played_on)} · ${m.kind === 'simulator' ? 'Simulator' : 'Ute'} · hcp ${esc(m.p1_name)} ${hcp(m.p1_hcp)} / ${esc(m.p2_name)} ${hcp(m.p2_hcp)}${m.p1_ch != null && m.p2_ch != null ? ` · spillehcp ${m.p1_ch} / ${m.p2_ch}` : ''}${given ? ' · ' + given : ''}</div>
         ${m.note ? `<div class="small">${esc(m.note)}</div>` : ''}
+        ${Array.isArray(m.holes) && m.holes.length ? holeTable(m) : ''}
         ${mine ? `<button class="btn ghost sm mpdel" data-id="${m.id}" style="margin-top:4px;min-height:28px;padding:2px 8px">Slett</button>` : ''}</div>
       <div class="score-badge ${m.winner === 0 ? 'even' : 'under'}" style="min-width:74px">${esc(mpResult(m))}<small>${wname ? esc(wname) : 'delt'}</small></div></div></li>`;
   }).join('')}</ul></div>` : `<div class="empty">Registrer den første matchen over.</div>`}`;
@@ -644,6 +661,7 @@ async function renderMatchplay() {
       renderMatchplay();
     } catch (err) { mperr.textContent = 'Kunne ikke lagre: ' + err.message; }
   });
+  $view.querySelector('#mpdetect').onclick = async () => { try { const n = await q(sb.rpc('detect_matches')); toast(`${n} matcher fra TrackMan er oppdatert`); renderMatchplay(); } catch (e) { toast('Feil: ' + e.message); } };
   // two-tap delete
   $view.querySelectorAll('.mpdel').forEach((b) => b.onclick = async () => {
     if (b.dataset.armed !== '1') { b.dataset.armed = '1'; b.textContent = 'Trykk igjen for å slette'; b.style.color = 'var(--bad)'; setTimeout(() => { b.dataset.armed = ''; b.textContent = 'Slett'; b.style.color = ''; }, 4000); return; }
@@ -651,16 +669,39 @@ async function renderMatchplay() {
   });
 }
 
-// ---------------------------------------------------------------- account menu
-document.getElementById('btn-account').onclick = async () => {
-  const { data } = await sb.auth.getUser();
-  if (confirm(`Innlogget som ${data.user?.email}.\n\nLogge ut?`)) { await sb.auth.signOut(); cache.clear(); route(); }
-};
+// ---------------------------------------------------------------- profile
+async function renderProfile() {
+  $title.textContent = 'Profil';
+  const { data: { user } } = await sb.auth.getUser();
+  const [prof, hist] = await Promise.all([
+    q(sb.from('profiles').select('display_name').eq('user_id', user.id)),
+    q(sb.from('hcp_history').select('valid_from,hcp_index').eq('user_id', user.id).order('valid_from', { ascending: false })),
+  ]);
+  const name = prof[0]?.display_name || '';
+  $view.innerHTML = `<div class="card"><h3 style="margin-top:0">Deg</h3>
+      <div class="small muted">Innlogget som ${esc(user.email)}</div>
+      <form id="pf"><label for="pfn">Navn (vises i Matchplay)</label><input id="pfn" type="text" value="${esc(name)}" required>
+        <div class="row" style="flex-wrap:nowrap"><div style="flex:1"><label for="pfh">Hcp-indeks</label><input id="pfh" type="number" step="0.1" min="-10" max="54" inputmode="decimal" value="${hist[0]?.hcp_index ?? ''}"></div>
+        <div style="flex:1"><label for="pfd">Gjelder fra</label><input id="pfd" type="date" value="${today()}"></div></div>
+        <div class="small muted" style="margin-top:6px">Brukes i matchplay: appen regner spillehandicap fra hcp-indeksen og slope/course rating for teen dere spilte, og gir full differanse på hullene med lavest slagindeks. Matcher etter denne datoen regnes om.</div>
+        <div class="row" style="margin-top:14px"><button class="btn primary" type="submit">Lagre</button><span id="pfe" class="small" style="color:var(--bad)"></span></div></form></div>
+    ${hist.length ? `<div class="card"><h3 style="margin-top:0">Hcp-historikk</h3><ul class="list">${hist.map((h) => `<li class="row"><span>${dateNo(h.valid_from)}</span><span class="spacer"></span><b class="num">${hcp(h.hcp_index)}</b></li>`).join('')}</ul></div>` : ''}
+    <div class="row" style="margin:16px 0"><button class="btn" id="logout">Logg ut</button></div>`;
+  $view.querySelector('#pf').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const v = pfh.value === '' ? null : Math.round(parseFloat(String(pfh.value).replace(',', '.')) * 10) / 10;
+    try { const r = await q(sb.rpc('set_profile', { p_name: pfn.value.trim(), p_hcp: v, p_from: pfd.value || today() }));
+      toast(`Lagret${r?.matches ? ` · ${r.matches} matcher regnet om` : ''}`); renderProfile(); }
+    catch (err) { pfe.textContent = 'Kunne ikke lagre: ' + err.message; }
+  });
+  $view.querySelector('#logout').onclick = async () => { await sb.auth.signOut(); cache.clear(); location.hash = '#/'; route(); };
+}
+document.getElementById('btn-account').onclick = () => { location.hash = '#/profil'; };
 
 // ---------------------------------------------------------------- router
 const routes = { '': ['home', renderHome], bag: ['bag', renderBag], runder: ['runder', renderRounds], baner: ['baner', renderCourses],
   strategi: ['strategi', () => renderStrategy($view, { sb, getProfile, toast, esc, fmt, setTitle: (t) => $title.textContent = t })],
-  match: ['match', renderMatchplay], sjekk: ['home', renderReview] };
+  match: ['match', renderMatchplay], profil: ['', renderProfile], sjekk: ['home', renderReview] };
 let routing = 0;
 async function route() {
   const my = ++routing;
