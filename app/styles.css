@@ -302,3 +302,9 @@ input:focus, select:focus { outline: 2px solid var(--gold-2); outline-offset: 1p
 .gap-p50::before { background: var(--gold-3); }
 .stars button.on, .stars.ro span { color: var(--gold-2); }
 .login-hero img { border: 2px solid var(--gold-2); }
+
+/* six tabs */
+.tabs { grid-template-columns: repeat(6, 1fr); }
+.tabs a { font-size: 10.5px; }
+table.mp td b.neg { color: var(--good); } table.mp td b.pos { color: var(--bad); }
+table.mp td, table.mp th { font-size: 15px; }

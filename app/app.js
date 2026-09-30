@@ -529,6 +529,128 @@ async function renderReview() {
   });
 }
 
+// ---------------------------------------------------------------- matchplay
+const MP_KEY = 'mc_match_names';
+function mpNames() { try { return { p1: 'Fredrik', p2: 'Jimmy', ...(JSON.parse(localStorage.getItem(MP_KEY)) || {}) }; } catch { return { p1: 'Fredrik', p2: 'Jimmy' }; } }
+function mpSaveNames(n) { try { localStorage.setItem(MP_KEY, JSON.stringify(n)); } catch { /* private mode */ } }
+const mpResult = (m) => m.winner === 0 ? 'Delt' : m.remaining ? `${m.margin}&${m.remaining}` : `${m.margin} opp`;
+const RESULTS = ['1 opp', '2 opp', '2&1', '3&1', '3&2', '4&2', '4&3', '5&3', '5&4', '6&4', '6&5', '7&5', '7&6', '8&6', '8&7', '9&7', '9&8', '10&8'];
+const lastWednesday = () => { const d = new Date(); const back = (d.getDay() - 3 + 7) % 7; d.setDate(d.getDate() - back); return d.toISOString().slice(0, 10); };
+const hcp = (v) => v === null || v === undefined ? '–' : Number(v).toLocaleString('nb-NO', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+
+async function renderMatchplay() {
+  $title.textContent = 'Matchplay';
+  $view.innerHTML = `<div class="loading">Laster…</div>`;
+  const [matches, overview, me] = await Promise.all([
+    q(sb.from('matches').select('*').order('played_on', { ascending: false }).order('created_at', { ascending: false }).limit(500)),
+    getOverview().catch(() => []),
+    sb.auth.getUser().then((r) => r.data.user),
+  ]);
+  const names = mpNames();
+  const key = (n) => String(n || '').trim().toLowerCase();
+  // standings per player name
+  const st = new Map();
+  const add = (name) => { const k = key(name); if (!st.has(k)) st.set(k, { name: String(name).trim(), n: 0, w: 0, d: 0, l: 0, pm: 0 }); return st.get(k); };
+  add(names.p1); add(names.p2);
+  const chrono = [...matches].reverse();
+  const series = []; let run = 0;
+  for (const m of chrono) {
+    const a = add(m.p1_name), b = add(m.p2_name);
+    a.n++; b.n++;
+    if (m.winner === 0) { a.d++; b.d++; }
+    else { const [w, l] = m.winner === 1 ? [a, b] : [b, a]; w.w++; l.l++; w.pm += m.margin; l.pm -= m.margin; }
+    const sgn = m.winner === 0 ? 0 : ((m.winner === 1 ? key(m.p1_name) : key(m.p2_name)) === key(names.p1) ? 1 : -1);
+    run += sgn * m.margin; series.push({ d: m.played_on, v: run, m });
+  }
+  const rows = [...st.values()].sort((x, y) => y.pm - x.pm || y.w - x.w);
+  const leader = rows[0] && rows[0].pm !== (rows[1]?.pm ?? 0) ? rows[0] : null;
+  const courses = [...new Set(overview.map((c) => cleanName(c.course_name)).concat(matches.map((m) => m.course_name)))].sort((a, b) => a.localeCompare(b, 'nb'));
+  const last = matches[0];
+
+  let h = `<section class="hero" style="padding-bottom:14px"><div class="eyebrow">Onsdagsmatchen</div>
+    <div style="font-family:var(--serif);font-size:24px;font-weight:700;margin:4px 0 2px">${esc(names.p1)} mot ${esc(names.p2)}</div>
+    <div class="sub">${matches.length ? (leader ? `${esc(leader.name)} leder med ${signed(leader.pm, 0)} etter ${matches.length} ${matches.length === 1 ? 'runde' : 'runder'}` : `Helt likt etter ${matches.length} ${matches.length === 1 ? 'runde' : 'runder'}`) : 'Ingen matcher registrert ennå'}</div>
+    ${series.length > 1 ? `<div id="mpchart" style="margin-top:10px"></div>` : ''}</section>
+  <div class="card"><table class="t mp"><thead><tr><th>Spiller</th><th>Runder</th><th>Seier</th><th>Delt</th><th>Tap</th><th>+/−</th></tr></thead><tbody>
+    ${rows.map((r) => `<tr><td><b>${esc(r.name)}</b></td><td>${r.n}</td><td>${r.w}</td><td>${r.d}</td><td>${r.l}</td>
+      <td><b class="${r.pm > 0 ? 'neg' : r.pm < 0 ? 'pos' : ''}">${r.pm > 0 ? '+' : ''}${r.pm}</b></td></tr>`).join('')}
+  </tbody></table><div class="small muted" style="margin-top:6px">+/− er summen av hull opp eller ned i hver match (3&2 teller 3).</div></div>
+
+  <details class="card" id="mpform" ${matches.length ? '' : 'open'}><summary><b>Registrer match</b></summary>
+    <form id="mpf" style="margin-top:8px">
+      <div class="row" style="flex-wrap:nowrap"><div style="flex:1"><label for="mpd">Dato</label><input id="mpd" type="date" value="${lastWednesday()}" required></div>
+        <div style="flex:1"><label for="mpk">Hvor</label><select id="mpk"><option value="outdoor">Ute</option><option value="simulator">Simulator</option></select></div></div>
+      <label for="mpc">Bane</label><input id="mpc" type="text" list="mpcourses" required placeholder="F.eks. Bærum Golfklubb" value="${esc(last?.course_name || '')}">
+      <datalist id="mpcourses">${courses.map((c) => `<option value="${esc(c)}">`).join('')}</datalist>
+      <div class="row" style="flex-wrap:nowrap">
+        <div style="flex:1"><label for="mpn1">Spiller 1</label><input id="mpn1" type="text" value="${esc(names.p1)}" required></div>
+        <div style="width:96px"><label for="mph1">Hcp</label><input id="mph1" type="number" step="0.1" min="-10" max="54" inputmode="decimal" value="${last ? (key(last.p1_name) === key(names.p1) ? last.p1_hcp : last.p2_hcp) ?? '' : ''}"></div></div>
+      <div class="row" style="flex-wrap:nowrap">
+        <div style="flex:1"><label for="mpn2">Spiller 2</label><input id="mpn2" type="text" value="${esc(names.p2)}" required></div>
+        <div style="width:96px"><label for="mph2">Hcp</label><input id="mph2" type="number" step="0.1" min="-10" max="54" inputmode="decimal" value="${last ? (key(last.p2_name) === key(names.p2) ? last.p2_hcp : last.p1_hcp) ?? '' : ''}"></div></div>
+      <label>Vinner</label>
+      <div class="seg" id="mpw"><button type="button" data-w="1" class="on">${esc(names.p1)}</button><button type="button" data-w="0">Delt</button><button type="button" data-w="2">${esc(names.p2)}</button></div>
+      <label for="mpr">Resultat</label><select id="mpr">${RESULTS.map((r) => `<option ${r === '2&1' ? 'selected' : ''}>${r}</option>`).join('')}</select>
+      <label for="mpnote">Notat (valgfritt)</label><input id="mpnote" type="text" placeholder="F.eks. avgjort på 17. med birdie">
+      <div class="row" style="margin-top:14px"><button class="btn primary" type="submit">Lagre match</button><span id="mperr" class="small" style="color:var(--bad)"></span></div>
+    </form></details>
+
+  <h2>Matcher</h2>
+  ${matches.length ? `<div class="card"><ul class="list">${matches.map((m) => {
+    const wname = m.winner === 1 ? m.p1_name : m.winner === 2 ? m.p2_name : null;
+    const mine = me && m.created_by === me.id;
+    return `<li><div class="row" style="flex-wrap:nowrap;align-items:flex-start">
+      <div style="flex:1;min-width:0"><div class="rtitle">${esc(m.course_name)}</div>
+        <div class="small muted">${dateNo(m.played_on)} · ${m.kind === 'simulator' ? 'Simulator' : 'Ute'} · hcp ${esc(m.p1_name)} ${hcp(m.p1_hcp)} / ${esc(m.p2_name)} ${hcp(m.p2_hcp)}${m.p1_hcp !== null && m.p2_hcp !== null ? ` (differanse ${hcp(Math.abs(m.p1_hcp - m.p2_hcp))})` : ''}</div>
+        ${m.note ? `<div class="small">${esc(m.note)}</div>` : ''}
+        ${mine ? `<button class="btn ghost sm mpdel" data-id="${m.id}" style="margin-top:4px;min-height:28px;padding:2px 8px">Slett</button>` : ''}</div>
+      <div class="score-badge ${m.winner === 0 ? 'even' : 'under'}" style="min-width:74px">${esc(mpResult(m))}<small>${wname ? esc(wname) : 'delt'}</small></div></div></li>`;
+  }).join('')}</ul></div>` : `<div class="empty">Registrer den første matchen over.</div>`}`;
+  $view.innerHTML = h;
+
+  // cumulative chart for player 1
+  const ch = $view.querySelector('#mpchart');
+  if (ch) {
+    const W = ch.clientWidth || 320, H = 70, pad = 6, n = series.length;
+    const vs = series.map((p) => p.v).concat(0), lo = Math.min(...vs), hi = Math.max(...vs), span = Math.max(1, hi - lo);
+    const X = (i) => pad + (i / (n - 1)) * (W - 2 * pad), Y = (v) => pad + ((hi - v) / span) * (H - 2 * pad);
+    const path = series.map((p, i) => `${i ? 'L' : 'M'}${X(i).toFixed(1)},${Y(p.v).toFixed(1)}`).join('');
+    ch.innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" role="img" aria-label="Akkumulert +/− for ${esc(names.p1)} over tid">
+      <line x1="${pad}" x2="${W - pad}" y1="${Y(0)}" y2="${Y(0)}" stroke="rgba(255,255,255,.35)" stroke-dasharray="3 4"/>
+      <path d="${path}" fill="none" stroke="#ffe08a" stroke-width="2.5" stroke-linejoin="round"/>
+      ${series.map((p, i) => `<circle cx="${X(i)}" cy="${Y(p.v)}" r="3" fill="#fff"><title>${dateNo(p.d)} · ${esc(p.m.course_name)} · ${esc(mpResult(p.m))} · ${esc(names.p1)} ${p.v > 0 ? '+' : ''}${p.v}</title></circle>`).join('')}</svg>
+      <div class="small" style="opacity:.8">${esc(names.p1)} sin stilling over tid (over streken = foran)</div>`;
+  }
+
+  // form
+  let winner = 1;
+  const f = $view.querySelector('#mpf');
+  $view.querySelector('#mpw').onclick = (e) => { const b = e.target.closest('button'); if (!b) return; winner = +b.dataset.w;
+    $view.querySelectorAll('#mpw button').forEach((x) => x.classList.toggle('on', x === b)); $view.querySelector('#mpr').disabled = winner === 0; };
+  const syncNames = () => { const b = $view.querySelectorAll('#mpw button'); b[0].textContent = mpn1.value || 'Spiller 1'; b[2].textContent = mpn2.value || 'Spiller 2'; };
+  mpn1.oninput = syncNames; mpn2.oninput = syncNames;
+  f.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const res = $view.querySelector('#mpr').value;
+    const [mg, rm] = res.includes('&') ? res.split('&').map(Number) : [parseInt(res, 10), 0];
+    const num = (v) => (v === '' ? null : Math.round(parseFloat(String(v).replace(',', '.')) * 10) / 10);
+    const row = { played_on: mpd.value, kind: mpk.value, course_name: mpc.value.trim(), p1_name: mpn1.value.trim(), p1_hcp: num(mph1.value),
+      p2_name: mpn2.value.trim(), p2_hcp: num(mph2.value), winner, margin: winner ? mg : 0, remaining: winner ? rm : 0, note: mpnote.value.trim() || null };
+    if (!row.course_name || !row.p1_name || !row.p2_name) { mperr.textContent = 'Fyll inn bane og navn.'; return; }
+    try {
+      await q(sb.from('matches').insert(row));
+      mpSaveNames({ p1: row.p1_name, p2: row.p2_name });
+      toast(`Match lagret: ${winner ? (winner === 1 ? row.p1_name : row.p2_name) + ' vant ' + res : 'delt'}`);
+      renderMatchplay();
+    } catch (err) { mperr.textContent = 'Kunne ikke lagre: ' + err.message; }
+  });
+  // two-tap delete
+  $view.querySelectorAll('.mpdel').forEach((b) => b.onclick = async () => {
+    if (b.dataset.armed !== '1') { b.dataset.armed = '1'; b.textContent = 'Trykk igjen for å slette'; b.style.color = 'var(--bad)'; setTimeout(() => { b.dataset.armed = ''; b.textContent = 'Slett'; b.style.color = ''; }, 4000); return; }
+    try { await q(sb.from('matches').delete().eq('id', b.dataset.id)); toast('Matchen er slettet'); renderMatchplay(); } catch (err) { toast('Kunne ikke slette: ' + err.message); }
+  });
+}
+
 // ---------------------------------------------------------------- account menu
 document.getElementById('btn-account').onclick = async () => {
   const { data } = await sb.auth.getUser();
@@ -538,7 +660,7 @@ document.getElementById('btn-account').onclick = async () => {
 // ---------------------------------------------------------------- router
 const routes = { '': ['home', renderHome], bag: ['bag', renderBag], runder: ['runder', renderRounds], baner: ['baner', renderCourses],
   strategi: ['strategi', () => renderStrategy($view, { sb, getProfile, toast, esc, fmt, setTitle: (t) => $title.textContent = t })],
-  sjekk: ['home', renderReview] };
+  match: ['match', renderMatchplay], sjekk: ['home', renderReview] };
 let routing = 0;
 async function route() {
   const my = ++routing;
