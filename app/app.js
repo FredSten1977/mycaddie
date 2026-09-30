@@ -534,6 +534,18 @@ const MP_KEY = 'mc_match_names';
 function mpNames() { try { return { p1: 'Fredrik', p2: 'Jimmy', ...(JSON.parse(localStorage.getItem(MP_KEY)) || {}) }; } catch { return { p1: 'Fredrik', p2: 'Jimmy' }; } }
 function mpSaveNames(n) { try { localStorage.setItem(MP_KEY, JSON.stringify(n)); } catch { /* private mode */ } }
 const mpResult = (m) => m.winner === 0 ? 'Delt' : m.remaining ? `${m.margin}&${m.remaining}` : `${m.margin} opp`;
+// Gross matchplay (no strokes) from the hole-by-hole scores; null when there is no hole data (manual matches)
+function grossOf(m) {
+  if (!Array.isArray(m.holes) || !m.holes.length) return null;
+  const hs = m.holes.filter((x) => x.g1 != null || x.g2 != null); const n = hs.length; let st = 0;
+  for (let i = 0; i < n; i++) {
+    const { g1, g2 } = hs[i];
+    st += g1 == null ? -1 : g2 == null ? 1 : g1 < g2 ? 1 : g1 > g2 ? -1 : 0;
+    const left = n - i - 1;
+    if (Math.abs(st) > left) return { winner: st > 0 ? 1 : 2, margin: Math.abs(st), remaining: left };
+  }
+  return { winner: st > 0 ? 1 : st < 0 ? 2 : 0, margin: Math.abs(st), remaining: 0 };
+}
 const RESULTS = ['1 opp', '2 opp', '2&1', '3&1', '3&2', '4&2', '4&3', '5&3', '5&4', '6&4', '6&5', '7&5', '7&6', '8&6', '8&7', '9&7', '9&8', '10&8'];
 const lastWednesday = () => { const d = new Date(); const back = (d.getDay() - 3 + 7) % 7; d.setDate(d.getDate() - back); return d.toISOString().slice(0, 10); };
 const hcp = (v) => v === null || v === undefined ? '–' : Number(v).toLocaleString('nb-NO', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
@@ -542,7 +554,7 @@ function holeTable(m) {
   const cell = (g, st) => `${g ?? '–'}${st ? `<sup style="color:var(--gold-ink)">${'•'.repeat(st)}</sup>` : ''}`;
   const status = (v) => v === 0 ? 'AS' : v > 0 ? `+${v}` : `−${-v}`;
   return `<details style="margin-top:6px"><summary class="small">Hull for hull</summary><div style="overflow-x:auto"><table class="t" style="font-size:13px;margin-top:4px">
-    <thead><tr><th>Hull</th><th>Par</th><th>SI</th><th>${esc(m.p1_name)}</th><th>${esc(m.p2_name)}</th><th>${esc(m.p1_name)} +/−</th></tr></thead><tbody>
+    <thead><tr><th>Hull</th><th>Par</th><th>SI</th><th>${esc(m.p1_name)}</th><th>${esc(m.p2_name)}</th><th>${esc(m.p1_name)} netto</th></tr></thead><tbody>
     ${m.holes.map((x) => `<tr style="${x.counted === false ? 'opacity:.45' : ''}"><td>${x.hole}</td><td>${x.par ?? ''}</td><td>${x.si ?? ''}</td>
       <td style="${x.res > 0 ? 'font-weight:700;color:var(--good)' : ''}">${cell(x.g1, x.s1)}</td><td style="${x.res < 0 ? 'font-weight:700;color:var(--good)' : ''}">${cell(x.g2, x.s2)}</td>
       <td>${x.counted === false ? '' : status(x.status)}</td></tr>`).join('')}
@@ -561,7 +573,7 @@ async function renderMatchplay() {
   const key = (n) => String(n || '').trim().toLowerCase();
   // standings per player name
   const st = new Map();
-  const add = (name) => { const k = key(name); if (!st.has(k)) st.set(k, { name: String(name).trim(), n: 0, w: 0, d: 0, l: 0, pm: 0 }); return st.get(k); };
+  const add = (name) => { const k = key(name); if (!st.has(k)) st.set(k, { name: String(name).trim(), n: 0, w: 0, d: 0, l: 0, pm: 0, gpm: 0, gn: 0 }); return st.get(k); };
   add(names.p1); add(names.p2);
   const chrono = [...matches].reverse();
   const series = []; let run = 0;
@@ -570,6 +582,8 @@ async function renderMatchplay() {
     a.n++; b.n++;
     if (m.winner === 0) { a.d++; b.d++; }
     else { const [w, l] = m.winner === 1 ? [a, b] : [b, a]; w.w++; l.l++; w.pm += m.margin; l.pm -= m.margin; }
+    const g = grossOf(m);
+    if (g) { a.gn++; b.gn++; if (g.winner) { const [gw, gl] = g.winner === 1 ? [a, b] : [b, a]; gw.gpm += g.margin; gl.gpm -= g.margin; } }
     const sgn = m.winner === 0 ? 0 : ((m.winner === 1 ? key(m.p1_name) : key(m.p2_name)) === key(names.p1) ? 1 : -1);
     run += sgn * m.margin; series.push({ d: m.played_on, v: run, m });
   }
@@ -583,10 +597,11 @@ async function renderMatchplay() {
     <div class="sub">${matches.length ? (leader ? `${esc(leader.name)} leder med ${signed(leader.pm, 0)} etter ${matches.length} ${matches.length === 1 ? 'runde' : 'runder'}` : `Helt likt etter ${matches.length} ${matches.length === 1 ? 'runde' : 'runder'}`) : 'Ingen matcher registrert ennå'}</div>
     ${series.length > 1 ? `<div id="mpchart" style="margin-top:10px"></div>` : ''}</section>
   ${matches.some((m) => m.auto && (m.p1_hcp === null || m.p2_hcp === null)) ? `<div class="card warn small">Noen matcher er regnet <b>brutto</b> fordi hcp ikke er hentet fra TrackMan ennå. Oppdater Chrome-utvidelsen til versjon 0.3.0 og synk, så hentes hcp fra scorekortene og matchene regnes om.</div>` : ''}
-  <div class="card"><table class="t mp"><thead><tr><th>Spiller</th><th>Runder</th><th>Seier</th><th>Delt</th><th>Tap</th><th>+/−</th></tr></thead><tbody>
+  <div class="card"><table class="t mp"><thead><tr><th>Spiller</th><th>Runder</th><th>Seier</th><th>Delt</th><th>Tap</th><th>+/− netto</th><th>+/− brutto</th></tr></thead><tbody>
     ${rows.map((r) => `<tr><td><b>${esc(r.name)}</b></td><td>${r.n}</td><td>${r.w}</td><td>${r.d}</td><td>${r.l}</td>
-      <td><b class="${r.pm > 0 ? 'neg' : r.pm < 0 ? 'pos' : ''}">${r.pm > 0 ? '+' : ''}${r.pm}</b></td></tr>`).join('')}
-  </tbody></table><div class="small muted" style="margin-top:6px">+/− er summen av hull opp eller ned i hver match (3&2 teller 3).</div></div>
+      <td><b class="${r.pm > 0 ? 'neg' : r.pm < 0 ? 'pos' : ''}">${r.pm > 0 ? '+' : ''}${r.pm}</b></td>
+      <td class="muted">${r.gn ? (r.gpm > 0 ? '+' : '') + r.gpm : '–'}</td></tr>`).join('')}
+  </tbody></table><div class="small muted" style="margin-top:6px">Seier, delt og tap er netto (med tildelte slag). +/− er summen av hull opp eller ned i hver match (3&2 teller 3). Brutto er samme match uten slag${matches.some((m) => !grossOf(m)) ? ', bare for matcher med score per hull' : ''}.</div></div>
 
   <details class="card" id="mpform" ${matches.length ? '' : 'open'}><summary><b>Registrer match</b></summary>
     <form id="mpf" style="margin-top:8px">
@@ -621,7 +636,8 @@ async function renderMatchplay() {
         ${m.note ? `<div class="small">${esc(m.note)}</div>` : ''}
         ${Array.isArray(m.holes) && m.holes.length ? holeTable(m) : ''}
         ${mine ? `<button class="btn ghost sm mpdel" data-id="${m.id}" style="margin-top:4px;min-height:28px;padding:2px 8px">Slett</button>` : ''}</div>
-      <div class="score-badge ${m.winner === 0 ? 'even' : 'under'}" style="min-width:74px">${esc(mpResult(m))}<small>${wname ? esc(wname) : 'delt'}</small></div></div></li>`;
+      <div style="text-align:center"><div class="score-badge ${m.winner === 0 ? 'even' : 'under'}" style="min-width:74px">${esc(mpResult(m))}<small>${wname ? esc(wname) : 'delt'} · netto</small></div>
+        ${(() => { const g = grossOf(m); return g ? `<div class="small muted" style="margin-top:4px">Brutto: ${esc(mpResult(g))}${g.winner ? ' ' + esc(g.winner === 1 ? m.p1_name : m.p2_name) : ''}</div>` : ''; })()}</div></div></li>`;
   }).join('')}</ul></div>` : `<div class="empty">Registrer den første matchen over.</div>`}`;
   $view.innerHTML = h;
 
