@@ -103,6 +103,8 @@ const getCatalog = () => cached('courses:catalog', () => q(sb.from('tm_courses')
   .limit(2000)), 30 * 60e3);
 export const getProfile = (from, to, acts) => cached(`profile:${from}:${to}:${acts}`, () =>
   q(sb.rpc('club_profile', { p_from: from, p_to: to, p_activities: acts.split(',') })));
+const getSwingAvgs = (from, to, acts) => cached(`profile:swing:${from}:${to}:${acts}`, () =>
+  q(sb.rpc('club_swing_avgs', { p_from: from, p_to: to, p_activities: acts.split(',') })));
 const getRounds = (kind) => cached('rounds:' + kind, () => q(sb.from('rounds')
   .select('id,kind,played_on,course_name,holes_played,par,strokes,stableford_points,counts_in_stats,regulation,tee_name')
   .eq('kind', kind).is('superseded_by', null).order('played_on', { ascending: false }).limit(400)));
@@ -275,7 +277,8 @@ async function renderBag() {
       ${legend}<div id="gap"></div></div>
     <div class="card"><h3>Spredning sett ovenfra</h3>
       <div class="small muted" style="margin-bottom:6px">Hver ellipse rommer 80 % av de gode fullslagene med kølla, målt der ballen ${mode === 'total' ? 'stopper' : 'lander'}. Bredden er sideavviket.</div>
-      ${legend}<div id="disp"></div></div>
+      ${legend}<div id="disp"></div>
+      <div id="swing" style="margin-top:10px"></div></div>
     <details class="card"><summary>Tabell med alle tall</summary><div style="overflow-x:auto"><table class="t"><thead><tr>
       <th>Kølle</th><th>Carry P20</th><th>Carry</th><th>Carry P80</th><th>Total P20</th><th>Total</th><th>Total P80</th><th>Side P80</th><th>Feilslag</th><th>n</th></tr></thead><tbody>` +
       tableRows.map((r) => `<tr><td>${esc(r.club)}</td><td>${fmt(r.carry_p20)}</td><td><b>${fmt(r.carry_p50)}</b></td><td>${fmt(r.carry_p80)}</td>
@@ -286,6 +289,19 @@ async function renderBag() {
   wireDist(body, 'dm', renderBag);
   gappingChart(body.querySelector('#gap'), shown);
   dispersionField(body.querySelector('#disp'), shown.filter((r) => r.side_abs_p80));
+  // Small table under the dispersion view: average swing numbers for the same clubs and shots
+  getSwingAvgs(periods[bagState.period][0], today(), srcs[bagState.src][0]).then((avgs) => {
+    const el = body.querySelector('#swing'); if (!el) return;
+    const names = new Set(shown.map((r) => r.club));
+    const list = avgs.filter((r) => names.has(r.club));
+    if (!list.length) return;
+    const deg = (v) => (v === null || v === undefined) ? '–' : (v > 0 ? '+' : '') + fmt(v, 1) + '°';
+    el.innerHTML = `<div style="overflow-x:auto"><table class="t"><thead><tr>
+      <th>Kølle</th><th>Club path</th><th>Face angle</th><th>Ball speed</th><th>Swing speed</th></tr></thead><tbody>` +
+      list.map((r) => `<tr><td>${esc(r.club)}</td><td>${deg(r.club_path_avg)}</td><td>${deg(r.face_angle_avg)}</td><td>${fmt(r.ball_speed_mph, 1)}</td><td>${fmt(r.club_speed_mph, 1)}</td></tr>`).join('') +
+      `</tbody></table></div>
+      <div class="small muted" style="margin-top:6px">Snitt av de gode fullslagene. Fart i mph. Club path: + er inn-til-ut, − er ut-til-inn. Face angle: + er åpen, − er lukket.</div>`;
+  }).catch(() => {});
   body.querySelector('#all').onchange = (e) => { bagState.showAll = e.target.checked; renderBag(); };
   body.querySelector('#bagedit').addEventListener('toggle', async (e) => { if (e.target.open) await renderBagEditor(body.querySelector('#bagform'), rows); }, { once: true });
 }
