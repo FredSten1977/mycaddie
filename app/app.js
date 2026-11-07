@@ -108,6 +108,12 @@ const getSwingAvgs = (from, to, acts) => cached(`profile:swing:${from}:${to}:${a
 const getRounds = (kind) => cached('rounds:' + kind, () => q(sb.from('rounds')
   .select('id,kind,played_on,course_name,holes_played,par,strokes,stableford_points,counts_in_stats,regulation,tee_name')
   .eq('kind', kind).is('superseded_by', null).order('played_on', { ascending: false }).limit(400)));
+// All completed simulator rounds (9 and 18 holes), regardless of date. Partial rounds are left out.
+const simRoundCount = () => cached('rounds:sim:count', async () => {
+  const { count, error } = await sb.from('rounds').select('id', { count: 'exact', head: true })
+    .eq('kind', 'simulator').is('superseded_by', null).eq('counts_in_stats', true);
+  if (error) throw error; return count || 0;
+});
 const reviewCount = () => cached('review:count', async () => {
   const { count, error } = await sb.from('v_shots').select('id', { count: 'exact', head: true })
     .like('reason', '%mulig feil kølle%').eq('club_reviewed', false).eq('excluded', false);
@@ -178,13 +184,14 @@ async function renderSetPassword() {
 async function renderHome() {
   $title.textContent = 'My Caddie';
   $view.innerHTML = `<div class="loading">Laster…</div>`;
-  const [sync, nReview, overview, summary, simRounds, profile, img] = await Promise.all([
+  const [sync, nReview, overview, summary, simRounds, profile, img, simTotal] = await Promise.all([
     q(sb.from('sync_runs').select('started_at,status,new_shots,message').order('started_at', { ascending: false }).limit(1)),
     reviewCount(), getOverview(),
     cached('summary:365', () => q(sb.rpc('round_summary', { p_from: isoDaysAgo(365), p_to: today() }))),
     getRounds('simulator'),
     getProfile(isoDaysAgo(365), today(), 'practice,map_my_bag,course_play'),
     imageIndex(),
+    simRoundCount(),
   ]);
   const last = sync[0];
   const ageDays = last ? (Date.now() - new Date(last.started_at)) / 864e5 : Infinity;
@@ -209,7 +216,7 @@ async function renderHome() {
       <div class="eyebrow">Simulator · 18 hull</div>
       <div class="big">${signed(+sim18.last5_to_par_avg)}</div>
       <div class="sub">snitt mot par siste 5 runder</div>
-      <div class="hero-stats"><div><b>${signed(+sim18.to_par_avg)}</b>snitt 12 mnd</div><div><b>${best === null ? '–' : signed(best, 0)}</b>beste siste 30</div><div><b>${sim18.rounds}</b>runder</div></div>
+      <div class="hero-stats"><div><b>${signed(+sim18.to_par_avg)}</b>snitt 12 mnd</div><div><b>${best === null ? '–' : signed(best, 0)}</b>beste siste 30</div><div><b>${fmt(simTotal)}</b>runder totalt</div></div>
       <div class="spark" id="spark"></div></section>`;
   if (ageDays > 7 && last) h += `<div class="card warn"><b>TrackMan-synken har ikke gått på ${last ? Math.floor(ageDays) + ' dager' : 'lenge'}.</b>
     <div class="small">Åpne Chrome med My Caddie Sync, eller trykk «Synk nå» i utvidelsen.</div></div>`;
