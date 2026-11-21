@@ -1,7 +1,7 @@
 // My Caddie Sync – TrackMan GraphQL activity → public.sync_import(jsonb) payload.
 // Pure functions: loaded by the extension service worker and by Node tests.
 (function (root) {
-  const PARSER_VERSION = 'tm-api-v3';
+  const PARSER_VERSION = 'tm-api-v4';
 
   const KIND_TO_ACTIVITY = {
     SESSION: 'practice', SHOT_ANALYSIS: 'practice', VIRTUAL_RANGE: 'practice', RANGE_PRACTICE: 'practice',
@@ -22,9 +22,13 @@
 
   const STROKE_TYPES = ['SessionActivity', 'ShotAnalysisSessionActivity', 'VirtualRangeSessionActivity',
     'MapMyBagSessionActivity', 'CombineTestActivity'];
-  const Q_STROKES = `query MyCaddieStrokes($id: ID!) { node(id: $id) { __typename
-${STROKE_TYPES.map((t) => `  ... on ${t} { id time kind strokes { time club targetDistance measurement { ${MEAS_FIELDS} } } }`).join('\n')}
+  // Circle target per stroke (Virtual Range): radius = big circle, tourRadius = small circle
+  const TARGET_FIELDS = 'target { type ... on StrokeCircleTarget { distance radius tourRadius diameter tourDiameter hcp } } data { key value } tags { group value origin }';
+  const strokesQuery = (extra) => `query MyCaddieStrokes($id: ID!) { node(id: $id) { __typename
+${STROKE_TYPES.map((t) => `  ... on ${t} { id time kind strokes { time club targetDistance ${extra ? TARGET_FIELDS : ''} measurement { ${MEAS_FIELDS}${extra ? ' targetPosition' : ''} } } }`).join('\n')}
 } }`;
+  const Q_STROKES = strokesQuery(true);
+  const Q_STROKES_BASIC = strokesQuery(false);   // fallback if TrackMan refuses the target fields
 
   // Every player's scorecard in the same game (used for matchplay: the opponent's holes and strokes)
   const PLAYERS = `playersScorecards { courseHcp totalHcpStrokes grossScore netScore numberOfHolesPlayed isCompleted teeName
@@ -96,7 +100,9 @@ ${STROKE_TYPES.map((t) => `  ... on ${t} { id time kind strokes { time club targ
         perClub[club] = (perClub[club] || 0) + 1;
         return { session: key, club, shot_no: perClub[club], shot_time: s.time || null,
                  ...shotFromMeasurement(s.measurement, rad),
-                 raw: { club: s.club, time: s.time, targetDistance: s.targetDistance ?? null, measurement: s.measurement || null } };
+                 raw: { club: s.club, time: s.time, targetDistance: s.targetDistance ?? null, measurement: s.measurement || null,
+                        ...('target' in s ? { target: s.target || null, targetPosition: (s.measurement && s.measurement.targetPosition) || null,
+                                              data: s.data || null, tags: s.tags || null } : {}) } };
       })
       .filter((s) => s.club);
     return {
@@ -198,13 +204,13 @@ ${STROKE_TYPES.map((t) => `  ... on ${t} { id time kind strokes { time club targ
       const q = light ? (basic ? Q_COURSE_LIGHT_BASIC : Q_COURSE_LIGHT) : (basic ? Q_COURSE_BASIC : Q_COURSE);
       return { query: q, variables: { id: summary.id } };
     }
-    return { query: Q_STROKES, variables: { id: summary.id } };
+    return { query: basic ? Q_STROKES_BASIC : Q_STROKES, variables: { id: summary.id } };
   }
   function toPayload(summary, node) {
     return summary.kind === 'COURSE_PLAY' ? coursePlayToPayload(summary, node) : strokesActivityToPayload(summary, node);
   }
 
-  const api = { PARSER_VERSION, SUPPORTED_KINDS, KIND_TO_ACTIVITY, Q_LIST, Q_STROKES, Q_COURSE, Q_COURSE_BASIC, Q_COURSE_LIGHT, queryFor, toPayload,
+  const api = { PARSER_VERSION, SUPPORTED_KINDS, KIND_TO_ACTIVITY, Q_LIST, Q_STROKES, Q_STROKES_BASIC, Q_COURSE, Q_COURSE_BASIC, Q_COURSE_LIGHT, queryFor, toPayload,
                 strokesActivityToPayload, coursePlayToPayload, playerCard };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.MyCaddieTransform = api;
 })(typeof self !== 'undefined' ? self : globalThis);

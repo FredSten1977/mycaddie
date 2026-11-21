@@ -16,4 +16,4 @@ Bruk
 Hva utvidelsen gjør
 - Leser bare (ingen endringer i TrackMan-kontoen din).
 - TrackMan-innloggingen blir i portalfanen og sendes ingen steder.
-- Dataene lagres i My Caddie under din egen bruker. Ingen andre brukere kan se dem.
+- Dataene lagres i My Caddie under din egen bruker. Andre brukere ser bare matcher og oppvarmingsresultater dere har spilt sammen.

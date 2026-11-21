@@ -80,6 +80,7 @@ async function gql(tabId, query, variables) { return (await gqlBody(tabId, query
 
 // Course rounds: ask for every player's scorecard; if TrackMan refuses that part, ask again without it.
 let playersSupported = true;
+let targetsSupported = true;   // circle targets on practice strokes (Virtual Range)
 async function fetchActivity(tabId, a, light) {
   if (a.kind === 'COURSE_PLAY' && playersSupported) {
     const q = T.queryFor(a, { light });
@@ -91,6 +92,16 @@ async function fetchActivity(tabId, a, light) {
     } catch (e) { if (!/playersScorecards/i.test(e.message)) throw e; }
     playersSupported = false;
     await progress('TrackMan ga ikke motspillerens scorekort – henter uten det', 'warn');
+  }
+  if (a.kind !== 'COURSE_PLAY' && targetsSupported) {
+    const q = T.queryFor(a);
+    try {
+      const b = await gqlBody(tabId, q.query, q.variables);
+      const failed = (b.errors || []).some((e) => /target|tags|data/i.test(JSON.stringify(e)));
+      if (!failed && b.data) return b.data.node;
+    } catch (e) { if (!/target|tags|data/i.test(e.message)) throw e; }
+    targetsSupported = false;
+    await progress('TrackMan ga ikke sirkelmål for slagene – henter uten det', 'warn');
   }
   const q = T.queryFor(a, { light, basic: true });
   const d = await gql(tabId, q.query, q.variables);
@@ -115,6 +126,8 @@ async function plan(tabId) {
   const known = new Set(await rpc('sync_known_activities'));
   // known course rounds whose scorecard should be read again (without shots), e.g. to learn who played
   const refresh = new Set(await rpc('sync_refresh_activities').catch(() => []));
+  // known Virtual Range sessions that still lack TrackMan's circle target (warm-up competition)
+  const targets = new Set(await rpc('sync_target_refresh_activities').catch(() => []));
   const byKind = {};
   const todo = [];
   let nRefresh = 0;
@@ -125,6 +138,7 @@ async function plan(tabId) {
     if (!supported) continue;
     if (!known.has(a.id)) { k.new++; todo.push(a); }
     else if (a.kind === 'COURSE_PLAY' && refresh.has(a.id)) { nRefresh++; todo.push({ ...a, light: true }); }
+    else if (a.kind === 'VIRTUAL_RANGE' && targets.has(a.id)) { nRefresh++; todo.push({ ...a, targets: true }); }
   }
   todo.sort((x, y) => String(x.time).localeCompare(String(y.time)));
   return { total: acts.length, byKind, todo, nRefresh, oldest: acts.map((a) => a.time).sort()[0] || null };
@@ -134,6 +148,7 @@ async function run({ preview = false, auto = false } = {}) {
   if (running) return { error: 'En synk kjører allerede' };
   running = true;
   playersSupported = true;
+  targetsSupported = true;
   let opened = null;
   try {
     await session();
@@ -143,7 +158,7 @@ async function run({ preview = false, auto = false } = {}) {
     await portalReady(pt.tab.id);
     const p = await plan(pt.tab.id);
     await progress(`Fant ${p.total} aktiviteter i TrackMan (eldste ${p.oldest ? p.oldest.slice(0, 10) : '–'}). ${p.todo.length - p.nRefresh} er nye` +
-                   (p.nRefresh ? `, ${p.nRefresh} runder oppdateres.` : '.'));
+                   (p.nRefresh ? `, ${p.nRefresh} kjente økter/runder oppdateres.` : '.'));
     if (preview) { await setState({ preview: { at: new Date().toISOString(), total: p.total, byKind: p.byKind, todo: p.todo.length } }); return { ok: true, preview: p.byKind, todo: p.todo.length }; }
 
     let nSess = 0, nShots = 0, nRounds = 0, nSuperseded = 0, failed = 0; const unknownClubs = new Set();
@@ -152,6 +167,13 @@ async function run({ preview = false, auto = false } = {}) {
       try {
         const node = await fetchActivity(pt.tab.id, a, !!a.light);
         const payload = T.toPayload(a, node);
+        if (a.targets) {
+          // already imported: only add the circle targets to the stored shots
+          if (targetsSupported) await rpc('sync_update_targets', { p: payload });
+          if ((i + 1) % 10 === 0 || i === p.todo.length - 1) await progress(`${i + 1}/${p.todo.length} aktiviteter · ${nShots} nye slag · ${nRounds} runder`);
+          await sleep(200);
+          continue;
+        }
         const r = await rpc('sync_import', { p: payload });
         nSess += r.sessions_new; nShots += r.shots_new; if (r.round_new) nRounds++; nSuperseded += r.legacy_rounds_superseded || 0;
         (r.unknown_clubs || []).forEach((c) => unknownClubs.add(c));

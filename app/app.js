@@ -586,14 +586,27 @@ function holeTable(m) {
     </tbody></table></div><div class="small muted">• = tildelt slag på hullet. Grå hull ble spilt etter at matchen var avgjort.</div></details>`;
 }
 
+const mpState = { tab: 'match' };
+const mpTabs = () => `<div class="row" style="margin-bottom:10px"><div class="seg" id="mptab">
+    <button data-k="match" class="${mpState.tab === 'match' ? 'on' : ''}">Banematch</button>
+    <button data-k="warmup" class="${mpState.tab === 'warmup' ? 'on' : ''}">Oppvarming</button></div></div>`;
+function wireMpTabs() {
+  const t = $view.querySelector('#mptab');
+  if (t) t.onclick = (e) => { const k = e.target.dataset.k; if (k && k !== mpState.tab) { mpState.tab = k; renderMatchplay(); } };
+}
+
 async function renderMatchplay() {
   $title.textContent = 'Matchplay';
-  $view.innerHTML = `<div class="loading">Laster…</div>`;
-  const [matches, overview, me] = await Promise.all([
+  $view.innerHTML = `${mpTabs()}<div class="loading">Laster…</div>`;
+  wireMpTabs();
+  if (mpState.tab === 'warmup') return renderWarmup();
+  const [matches, overview, me, warmups] = await Promise.all([
     q(sb.from('matches').select('*').order('played_on', { ascending: false }).order('created_at', { ascending: false }).limit(500)),
     getOverview().catch(() => []),
     sb.auth.getUser().then((r) => r.data.user),
+    q(sb.from('warmup_duels').select('played_on,status,p1_name,p2_name,result').in('status', ['auto', 'bekreftet'])).catch(() => []),
   ]);
+  const wuByDay = new Map(warmups.map((w) => [w.played_on, w]));
   const names = mpNames();
   const key = (n) => String(n || '').trim().toLowerCase();
   // standings per player name
@@ -617,7 +630,7 @@ async function renderMatchplay() {
   const courses = [...new Set(overview.map((c) => cleanName(c.course_name)).concat(matches.map((m) => m.course_name)))].sort((a, b) => a.localeCompare(b, 'nb'));
   const last = matches[0];
 
-  let h = `<section class="hero" style="padding-bottom:14px"><div class="eyebrow">Onsdagsmatchen</div>
+  let h = `${mpTabs()}<section class="hero" style="padding-bottom:14px"><div class="eyebrow">Onsdagsmatchen</div>
     <div style="font-family:var(--serif);font-size:24px;font-weight:700;margin:4px 0 2px">${esc(names.p1)} mot ${esc(names.p2)}</div>
     <div class="sub">${matches.length ? (leader ? `${esc(leader.name)} leder med ${signed(leader.pm, 0)} etter ${matches.length} ${matches.length === 1 ? 'runde' : 'runder'}` : `Helt likt etter ${matches.length} ${matches.length === 1 ? 'runde' : 'runder'}`) : 'Ingen matcher registrert ennå'}</div>
     ${series.length > 1 ? `<div id="mpchart" style="margin-top:10px"></div>` : ''}</section>
@@ -659,12 +672,15 @@ async function renderMatchplay() {
       <div style="flex:1;min-width:0"><div class="rtitle">${esc(m.course_name)} ${m.auto ? '<span class="chip">fra TrackMan</span>' : ''}</div>
         <div class="small muted">${dateNo(m.played_on)} · ${m.kind === 'simulator' ? 'Simulator' : 'Ute'} · hcp ${esc(m.p1_name)} ${hcp(m.p1_hcp)} / ${esc(m.p2_name)} ${hcp(m.p2_hcp)}${m.p1_ch != null && m.p2_ch != null ? ` · spillehcp ${m.p1_ch} / ${m.p2_ch}` : ''}${given ? ' · ' + given : ''}</div>
         ${m.note ? `<div class="small">${esc(m.note)}</div>` : ''}
+        ${wuByDay.has(m.played_on) ? wuLine(wuByDay.get(m.played_on)) : ''}
         ${Array.isArray(m.holes) && m.holes.length ? holeTable(m) : ''}
         ${mine ? `<button class="btn ghost sm mpdel" data-id="${m.id}" style="margin-top:4px;min-height:28px;padding:2px 8px">Slett</button>` : ''}</div>
       <div style="text-align:center"><div class="score-badge ${m.winner === 0 ? 'even' : 'under'}" style="min-width:74px">${esc(mpResult(m))}<small>${wname ? esc(wname) : 'delt'} · netto</small></div>
         ${(() => { const g = grossOf(m); return g ? `<div class="small muted" style="margin-top:4px">Brutto: ${esc(mpResult(g))}${g.winner ? ' ' + esc(g.winner === 1 ? m.p1_name : m.p2_name) : ''}</div>` : ''; })()}</div></div></li>`;
   }).join('')}</ul></div>` : `<div class="empty">Registrer den første matchen over.</div>`}`;
   $view.innerHTML = h;
+  wireMpTabs();
+  $view.querySelectorAll('[data-go-warmup]').forEach((a) => a.onclick = (e) => { e.preventDefault(); mpState.tab = 'warmup'; renderMatchplay(); });
 
   // cumulative chart for player 1
   const ch = $view.querySelector('#mpchart');
@@ -710,6 +726,125 @@ async function renderMatchplay() {
   });
 }
 
+// ---------------------------------------------------------------- warm-up competition (Virtual Range)
+// Rules v1: through the bag; move on after 2 balls in the big circle or 1 in the small circle.
+const num2 = (v) => fmt(v, 2);
+const wuName = (w, k) => (k === 1 ? w.p1_name : k === 2 ? w.p2_name : null);
+const wuMatchRes = (m) => (!m || !m.n ? '–' : m.winner === 0 ? 'Delt' : m.remaining ? `${m.margin}&${m.remaining}` : `${m.margin} opp`);
+function wuLine(w) {
+  const st = w.result.stroke;
+  return `<div class="small" style="margin-top:2px"><a href="#/match" data-go-warmup>Oppvarming</a>: ${esc(w.p1_name)} ${num2(st.a1)} – ${esc(w.p2_name)} ${num2(st.a2)} slag/kølle${st.winner ? ` · <b>${esc(wuName(w, st.winner))}</b>` : ' · delt'}</div>`;
+}
+// One shot as a dot: ● small circle, ◐ big circle, ○ miss, · unknown
+const wuDot = (v) => v === 2 ? '<span title="Liten sirkel" style="color:var(--good)">●</span>' : v === 1 ? '<span title="Stor sirkel" style="color:var(--gold-ink)">◐</span>'
+  : v === 0 ? '<span title="Bom" class="muted">○</span>' : '';
+function wuClubTable(w) {
+  const b2 = new Map(w.e2.blocks.map((b) => [b.club, b]));
+  const seen = new Set();
+  const rows = [];
+  for (const b of w.e1.blocks) { seen.add(b.club); rows.push([b, b2.get(b.club)]); }
+  for (const b of w.e2.blocks) if (!seen.has(b.club)) rows.push([null, b]);
+  const hold = new Map((w.result.match.holes || []).map((x) => [x.club, x]));
+  const cell = (b) => !b ? '<span class="muted">–</span>'
+    : `<b>${b.shots}</b>${b.done_at && b.done_at !== b.shots ? '<sup title="Regelen var oppfylt før siste slag">*</sup>' : ''} <span style="letter-spacing:1px">${(b.hits || []).map(wuDot).join('')}</span>`;
+  return `<details style="margin-top:6px"><summary class="small">Kølle for kølle</summary><div style="overflow-x:auto"><table class="t" style="font-size:13px;margin-top:4px">
+    <thead><tr><th>Kølle</th><th>Mål</th><th>${esc(w.p1_name)}</th><th>${esc(w.p2_name)}</th></tr></thead><tbody>
+    ${rows.map(([a, b]) => { const x = hold.get((a || b).club); const r = x ? x.res : 0;
+      return `<tr style="${x && x.counted === false ? 'opacity:.55' : ''}"><td>${esc((a || b).name)}</td><td>${fmt((a || b).tgt)} m</td>
+        <td style="${r > 0 ? 'color:var(--good)' : ''}">${cell(a)}</td><td style="${r < 0 ? 'color:var(--good)' : ''}">${cell(b)}</td></tr>`; }).join('')}
+    <tr><td><b>Sum</b></td><td></td><td><b>${w.e1.shots}</b> <span class="muted">(${w.e1.clubs} køller)</span></td><td><b>${w.e2.shots}</b> <span class="muted">(${w.e2.clubs} køller)</span></td></tr>
+    </tbody></table></div><div class="small muted">Grønt = vant kølla i matchplay. ● liten sirkel, ◐ stor sirkel, ○ bom.${w.e1.hit_data && w.e2.hit_data ? '' : ' Treff vises når begge har synket med utvidelse 0.5.0.'}</div></details>`;
+}
+
+async function renderWarmup() {
+  const [duels, me] = await Promise.all([
+    q(sb.from('warmup_duels').select('*').order('played_on', { ascending: false }).limit(300)),
+    sb.auth.getUser().then((r) => r.data.user),
+  ]);
+  const active = duels.filter((w) => w.status === 'auto' || w.status === 'bekreftet');
+  const cands = duels.filter((w) => w.status === 'kandidat');
+  const rejected = duels.filter((w) => w.status === 'avvist');
+  const mine = (w) => me && (w.p1_user === me.id || w.p2_user === me.id);
+  const p1 = active[0]?.p1_name || mpNames().p1, p2 = active[0]?.p2_name || mpNames().p2;
+
+  // standings: three systems
+  const tally = () => ({ w1: 0, d: 0, w2: 0, n: 0 });
+  const T = { stroke: tally(), match: tally(), eff: tally() };
+  const add = (t, winner) => { t.n++; if (winner === 1) t.w1++; else if (winner === 2) t.w2++; else t.d++; };
+  let a1 = 0, a2 = 0;
+  for (const w of active) {
+    add(T.stroke, w.result.stroke.winner);
+    if (w.result.match.n) add(T.match, w.result.match.winner);
+    if (w.result.eff) add(T.eff, w.result.eff.winner);
+    a1 += +w.result.stroke.a1 || 0; a2 += +w.result.stroke.a2 || 0;
+  }
+  // which clubs cost the most shots
+  const clubs = new Map();
+  for (const w of active) for (const [k, e] of [[1, w.e1], [2, w.e2]]) for (const b of e.blocks) {
+    const c = clubs.get(b.club) || clubs.set(b.club, { name: b.name, tgt: [], s1: [], s2: [] }).get(b.club);
+    c[`s${k}`].push(b.shots); if (b.tgt) c.tgt.push(+b.tgt);
+  }
+  const avg = (a) => a.length ? a.reduce((x, y) => x + y, 0) / a.length : null;
+  const clubRows = [...clubs.values()].filter((c) => c.s1.length + c.s2.length >= 2).sort((x, y) => (avg(x.tgt) ?? 0) - (avg(y.tgt) ?? 0));
+  const leadTxt = (t) => t.w1 === t.w2 ? 'Likt' : `${esc(t.w1 > t.w2 ? p1 : p2)} leder`;
+
+  let h = `${mpTabs()}<section class="hero" style="padding-bottom:14px"><div class="eyebrow">Oppvarmingen</div>
+    <div style="font-family:var(--serif);font-size:24px;font-weight:700;margin:4px 0 2px">${esc(p1)} mot ${esc(p2)}</div>
+    <div class="sub">${active.length ? `${active.length} ${active.length === 1 ? 'oppvarming' : 'oppvarminger'} · snitt ${esc(p1)} ${num2(a1 / active.length)} / ${esc(p2)} ${num2(a2 / active.length)} slag per kølle` : 'Ingen oppvarminger registrert ennå'}</div></section>
+  ${active.length ? `<div class="card"><table class="t mp"><thead><tr><th>Poengsystem</th><th>${esc(p1)}</th><th>Delt</th><th>${esc(p2)}</th><th></th></tr></thead><tbody>
+    <tr><td><b>Slagspill</b><div class="small muted">færrest slag per kølle</div></td><td>${T.stroke.w1}</td><td>${T.stroke.d}</td><td>${T.stroke.w2}</td><td class="small">${leadTxt(T.stroke)}</td></tr>
+    <tr><td><b>Matchplay</b><div class="small muted">hver felles kølle er et hull</div></td><td>${T.match.w1}</td><td>${T.match.d}</td><td>${T.match.w2}</td><td class="small">${T.match.n ? leadTxt(T.match) : '–'}</td></tr>
+    <tr><td><b>Effektivitet</b><div class="small muted">sirkelpoeng per slag</div></td><td>${T.eff.w1}</td><td>${T.eff.d}</td><td>${T.eff.w2}</td><td class="small">${T.eff.n ? leadTxt(T.eff) : 'venter på treffdata'}</td></tr>
+  </tbody></table><div class="small muted" style="margin-top:6px">Regel: videre til neste kølle etter 2 baller i stor sirkel eller 1 i liten. Slagspill avgjøres på slag per kølle, så ulikt antall køller i bagen ikke avgjør. Effektivitet: liten sirkel = 2 poeng, stor = 1, delt på antall slag.</div></div>` : ''}
+
+  ${cands.length ? `<h2>Mulige oppvarminger</h2><div class="card"><div class="small muted" style="margin-bottom:6px">Begge hadde en Virtual Range-økt samme dag, men det var ingen match. Bekreft om det var en oppvarmingskonkurranse.</div><ul class="list">${cands.map((w) => `<li>
+    <div class="row" style="flex-wrap:nowrap"><div style="flex:1"><b>${dateNo(w.played_on)}</b><div class="small muted">${esc(w.p1_name)} ${w.e1.shots} slag / ${w.e1.clubs} køller · ${esc(w.p2_name)} ${w.e2.shots} slag / ${w.e2.clubs} køller</div></div>
+    ${mine(w) ? `<button class="btn primary sm wuset" data-id="${w.id}" data-s="bekreftet">Bekreft</button><button class="btn ghost sm wuset" data-id="${w.id}" data-s="avvist">Nei</button>` : ''}</div></li>`).join('')}</ul></div>` : ''}
+
+  <div class="small muted" style="margin:8px 2px">Oppvarmingen registreres automatisk når dere begge har synket en Virtual Range-økt samme dag som en match.
+    <button class="btn ghost sm" id="wudetect">Se etter nye nå</button></div>
+  <details class="card"><summary><b>Legg til manuelt</b></summary><div class="small muted" style="margin:6px 0">Velg dagen. Appen kobler sammen Virtual Range-øktene deres fra den dagen, også om de ikke ble funnet automatisk.</div>
+    <div class="row" style="flex-wrap:nowrap"><input id="wuday" type="date" value="${lastWednesday()}" style="flex:1"><button class="btn primary sm" id="wuadd">Legg til</button></div></details>
+
+  <h2>Oppvarminger</h2>
+  ${active.length ? `<div class="card"><ul class="list">${active.map((w) => { const r = w.result; return `<li><div class="row" style="flex-wrap:nowrap;align-items:flex-start">
+      <div style="flex:1;min-width:0"><div class="rtitle">${dateNo(w.played_on)} ${w.status === 'auto' ? '<span class="chip">match samme dag</span>' : '<span class="chip">bekreftet</span>'}</div>
+        <div class="small muted">${esc(w.p1_name)} ${w.e1.shots} slag på ${w.e1.clubs} køller · ${esc(w.p2_name)} ${w.e2.shots} slag på ${w.e2.clubs} køller</div>
+        <div class="small">Matchplay: <b>${esc(wuMatchRes(r.match))}</b>${r.match.winner ? ' ' + esc(wuName(w, r.match.winner)) : ''}${r.match.n ? ` <span class="muted">(${r.match.n} felles køller)</span>` : ''}
+          ${r.eff ? ` · Effektivitet: ${num2(r.eff.e1)} / ${num2(r.eff.e2)}${r.eff.winner ? ' <b>' + esc(wuName(w, r.eff.winner)) + '</b>' : ''}` : ''}</div>
+        ${wuClubTable(w)}
+        ${mine(w) ? `<button class="btn ghost sm wuset" data-id="${w.id}" data-s="avvist" style="margin-top:4px;min-height:28px;padding:2px 8px">Ikke oppvarming</button>` : ''}</div>
+      <div style="text-align:center"><div class="score-badge ${r.stroke.winner ? 'under' : 'even'}" style="min-width:74px">${num2(r.stroke.winner === 2 ? r.stroke.a2 : r.stroke.a1)}<small>${r.stroke.winner ? esc(wuName(w, r.stroke.winner)) : 'delt'} · slag/kølle</small></div>
+        <div class="small muted" style="margin-top:4px">${num2(r.stroke.a1)} – ${num2(r.stroke.a2)}</div></div></div></li>`; }).join('')}</ul></div>`
+    : `<div class="empty">Ingen oppvarminger ennå. Synk begge to etter neste onsdag.</div>`}
+
+  ${clubRows.length ? `<h2>Hvilke køller koster mest?</h2><div class="card"><table class="t"><thead><tr><th>Kølle</th><th>Mål</th><th>${esc(p1)}</th><th>${esc(p2)}</th></tr></thead><tbody>
+    ${clubRows.map((c) => { const x1 = avg(c.s1), x2 = avg(c.s2); return `<tr><td>${esc(c.name)}</td><td>${fmt(avg(c.tgt))} m</td>
+      <td>${x1 === null ? '–' : `<b style="${x1 >= 3 ? 'color:var(--bad)' : ''}">${fmt(x1, 1)}</b> <span class="muted small">(${c.s1.length})</span>`}</td>
+      <td>${x2 === null ? '–' : `<b style="${x2 >= 3 ? 'color:var(--bad)' : ''}">${fmt(x2, 1)}</b> <span class="muted small">(${c.s2.length})</span>`}</td></tr>`; }).join('')}
+  </tbody></table><div class="small muted" style="margin-top:6px">Snitt antall slag før regelen var oppfylt (antall oppvarminger i parentes). Rødt = 3 slag eller mer.</div></div>` : ''}
+
+  ${rejected.length ? `<details class="card"><summary class="small">Avviste (${rejected.length})</summary><ul class="list">${rejected.map((w) => `<li><div class="row" style="flex-wrap:nowrap"><div style="flex:1">${dateNo(w.played_on)} <span class="small muted">${w.e1.shots} / ${w.e2.shots} slag</span></div>
+    ${mine(w) ? `<button class="btn ghost sm wuset" data-id="${w.id}" data-s="bekreftet">Gjenopprett</button>` : ''}</div></li>`).join('')}</ul></details>` : ''}`;
+  $view.innerHTML = h;
+  wireMpTabs();
+
+  $view.querySelectorAll('.wuset').forEach((b) => b.onclick = async () => {
+    try { await q(sb.rpc('warmup_set_status', { p_id: b.dataset.id, p_status: b.dataset.s }));
+      toast(b.dataset.s === 'avvist' ? 'Markert som ikke oppvarming' : 'Oppvarmingen er bekreftet'); renderMatchplay(); }
+    catch (e) { toast('Feil: ' + e.message); }
+  });
+  $view.querySelector('#wudetect').onclick = async () => {
+    try { const n = await q(sb.rpc('detect_warmups')); toast(`${n} oppvarminger er oppdatert`); renderMatchplay(); } catch (e) { toast('Feil: ' + e.message); }
+  };
+  $view.querySelector('#wuadd').onclick = async () => {
+    const d = $view.querySelector('#wuday').value; if (!d) return;
+    try { const n = await q(sb.rpc('detect_warmups', { p_day: d, p_force: true }));
+      toast(n ? 'Oppvarmingen er lagt til' : 'Fant ikke Virtual Range-økter for begge den dagen'); renderMatchplay(); }
+    catch (e) { toast('Feil: ' + e.message); }
+  };
+}
+
 // ---------------------------------------------------------------- profile
 async function renderProfile() {
   $title.textContent = 'Profil';
@@ -728,12 +863,12 @@ async function renderProfile() {
         <div class="row" style="margin-top:14px"><button class="btn primary" type="submit">Lagre</button><span id="pfe" class="small" style="color:var(--bad)"></span></div></form></div>
     ${hist.length ? `<div class="card"><h3 style="margin-top:0">Hcp-historikk</h3><ul class="list">${hist.map((h) => `<li class="row"><span>${dateNo(h.valid_from)}</span><span class="spacer"></span><b class="num">${hcp(h.hcp_index)}</b></li>`).join('')}</ul></div>` : ''}
     <div class="card"><h3 style="margin-top:0">Chrome-utvidelse</h3>
-      <div class="small muted">My Caddie Sync henter rundene og slagene dine fra TrackMan. Nyeste versjon: 0.4.0.</div>
+      <div class="small muted">My Caddie Sync henter rundene og slagene dine fra TrackMan. Nyeste versjon: 0.5.0.</div>
       <div class="row" style="margin-top:12px"><a class="btn primary" href="my-caddie-sync.zip?v=040" download>Last ned My Caddie Sync</a></div>
       <ol class="small" style="margin:12px 0 0;padding-left:18px">
         <li>Pakk ut zip-filen til en fast mappe (erstatt den gamle).</li>
         <li>Åpne <b>chrome://extensions</b>, slå på «Utviklermodus», fjern den gamle utvidelsen og velg «Last inn upakket» på mappen.</li>
-        <li>Sjekk at versjonen er 0.4.0, og trykk «Synk nå».</li></ol></div>
+        <li>Sjekk at versjonen er 0.5.0, og trykk «Synk nå».</li></ol></div>
     <div class="row" style="margin:16px 0"><button class="btn" id="logout">Logg ut</button></div>`;
   $view.querySelector('#pf').addEventListener('submit', async (e) => {
     e.preventDefault();
