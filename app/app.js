@@ -586,26 +586,76 @@ function holeTable(m) {
     </tbody></table></div><div class="small muted">• = tildelt slag på hullet. Grå hull ble spilt etter at matchen var avgjort.</div></details>`;
 }
 
-const mpState = { tab: 'match' };
-const mpTabs = () => `<div class="row" style="margin-bottom:10px"><div class="seg" id="mptab">
+// Seasons (table match_seasons): a season runs from starts_on until the next one starts.
+const SEASONS_FALLBACK = [{ name: '2026', starts_on: '2000-01-01' }, { name: '2027', starts_on: '2026-11-21' }];
+const getSeasons = () => cached('seasons', async () => {
+  const r = await q(sb.from('match_seasons').select('name,starts_on').order('starts_on')).catch(() => null);
+  return r && r.length ? r : SEASONS_FALLBACK;
+}, 60 * 60e3);
+const mpState = { tab: 'match', season: null, seasons: SEASONS_FALLBACK };
+const seasonRange = () => { const ss = mpState.seasons; const i = Math.max(0, ss.findIndex((x) => x.name === mpState.season));
+  return { from: ss[i].starts_on, to: ss[i + 1]?.starts_on || null, closed: i < ss.length - 1, name: ss[i].name }; };
+const inSeason = (d) => { const r = seasonRange(); return d >= r.from && (!r.to || d < r.to); };
+const mpTabs = () => `<div class="row" style="margin-bottom:10px;gap:8px;flex-wrap:wrap">
+  <div class="seg" id="mpseason">${mpState.seasons.map((x) => `<button data-k="${esc(x.name)}" class="${mpState.season === x.name ? 'on' : ''}">${esc(x.name)}</button>`).join('')}</div>
+  <div class="seg" id="mptab">
     <button data-k="match" class="${mpState.tab === 'match' ? 'on' : ''}">Banematch</button>
     <button data-k="warmup" class="${mpState.tab === 'warmup' ? 'on' : ''}">Oppvarming</button></div></div>`;
 function wireMpTabs() {
   const t = $view.querySelector('#mptab');
   if (t) t.onclick = (e) => { const k = e.target.dataset.k; if (k && k !== mpState.tab) { mpState.tab = k; renderMatchplay(); } };
+  const s = $view.querySelector('#mpseason');
+  if (s) s.onclick = (e) => { const k = e.target.dataset.k; if (k && k !== mpState.season) { mpState.season = k; renderMatchplay(); } };
+}
+// Standings from matches (net): per player name
+function mpStandings(matches) {
+  const key = (n) => String(n || '').trim().toLowerCase(); const st = new Map();
+  const add = (name) => { const k = key(name); if (!st.has(k)) st.set(k, { name: String(name).trim(), n: 0, w: 0, d: 0, l: 0, pm: 0 }); return st.get(k); };
+  for (const m of matches) {
+    const a = add(m.p1_name), b = add(m.p2_name); a.n++; b.n++;
+    if (m.winner === 0) { a.d++; b.d++; } else { const [w, l] = m.winner === 1 ? [a, b] : [b, a]; w.w++; l.l++; w.pm += m.margin; l.pm -= m.margin; }
+  }
+  return [...st.values()].sort((x, y) => y.pm - x.pm || y.w - x.w);
+}
+// Final result card for a closed season: matchplay + the three warm-up systems
+function seasonSummary(matches, duels) {
+  const rows = mpStandings(matches);
+  const act = duels.filter((w) => w.status === 'auto' || w.status === 'bekreftet');
+  const p1 = act[0]?.p1_name || rows[0]?.name || mpNames().p1, p2 = act[0]?.p2_name || rows[1]?.name || mpNames().p2;
+  const T = { stroke: [0, 0, 0], match: [0, 0, 0], eff: [0, 0, 0] };
+  for (const w of act) {
+    T.stroke[w.result.stroke.winner]++;
+    if (w.result.match.n) T.match[w.result.match.winner]++;
+    if (w.result.eff) T.eff[w.result.eff.winner]++;
+  }
+  const lead = (t) => t[1] === t[2] ? 'likt' : `<b>${esc(t[1] > t[2] ? p1 : p2)}</b>`;
+  const r = seasonRange();
+  return `<div class="card accent"><div class="eyebrow" style="margin-bottom:4px">Sesong ${esc(r.name)} · sluttresultat</div>
+    <table class="t mp"><thead><tr><th></th><th>${esc(p1)}</th><th>Delt</th><th>${esc(p2)}</th><th>Vinner</th></tr></thead><tbody>
+    ${(() => { const a = rows.find((x) => x.name.toLowerCase() === p1.toLowerCase()) || { w: 0, d: 0, l: 0, pm: 0, n: 0 };
+      return `<tr><td><b>Banematch</b><div class="small muted">${a.n} matcher · ${a.pm > 0 ? '+' : ''}${a.pm} hull for ${esc(p1)}</div></td><td>${a.w}</td><td>${a.d}</td><td>${a.l}</td><td>${a.w === a.l ? (a.pm === 0 ? 'likt' : `<b>${esc(a.pm > 0 ? p1 : p2)}</b>`) : `<b>${esc(a.w > a.l ? p1 : p2)}</b>`}</td></tr>`; })()}
+    <tr><td><b>Oppvarming · slagspill</b><div class="small muted">${act.length} oppvarminger</div></td><td>${T.stroke[1]}</td><td>${T.stroke[0]}</td><td>${T.stroke[2]}</td><td>${lead(T.stroke)}</td></tr>
+    <tr><td><b>Oppvarming · matchplay</b></td><td>${T.match[1]}</td><td>${T.match[0]}</td><td>${T.match[2]}</td><td>${lead(T.match)}</td></tr>
+    <tr><td><b>Oppvarming · effektivitet</b></td><td>${T.eff[1]}</td><td>${T.eff[0]}</td><td>${T.eff[2]}</td><td>${T.eff[1] + T.eff[2] ? lead(T.eff) : '–'}</td></tr>
+    </tbody></table><div class="small muted" style="margin-top:6px">Sesongen er avsluttet. Banematch: seier/delt/tap netto, vinner på flest seire (deretter hull). Detaljene ligger under.</div></div>`;
 }
 
 async function renderMatchplay() {
   $title.textContent = 'Matchplay';
+  mpState.seasons = await getSeasons();
+  if (!mpState.season || !mpState.seasons.some((x) => x.name === mpState.season)) mpState.season = mpState.seasons[mpState.seasons.length - 1].name;
   $view.innerHTML = `${mpTabs()}<div class="loading">Laster…</div>`;
   wireMpTabs();
   if (mpState.tab === 'warmup') return renderWarmup();
-  const [matches, overview, me, warmups] = await Promise.all([
+  const [allMatches, overview, me, allWarmups] = await Promise.all([
     q(sb.from('matches').select('*').order('played_on', { ascending: false }).order('created_at', { ascending: false }).limit(500)),
     getOverview().catch(() => []),
     sb.auth.getUser().then((r) => r.data.user),
     q(sb.from('warmup_duels').select('played_on,status,p1_name,p2_name,result').in('status', ['auto', 'bekreftet'])).catch(() => []),
   ]);
+  const matches = allMatches.filter((m) => inSeason(m.played_on));
+  const warmups = allWarmups.filter((w) => inSeason(w.played_on));
+  const closed = seasonRange().closed;
   const wuByDay = new Map(warmups.map((w) => [w.played_on, w]));
   const names = mpNames();
   const key = (n) => String(n || '').trim().toLowerCase();
@@ -627,10 +677,10 @@ async function renderMatchplay() {
   }
   const rows = [...st.values()].sort((x, y) => y.pm - x.pm || y.w - x.w);
   const leader = rows[0] && rows[0].pm !== (rows[1]?.pm ?? 0) ? rows[0] : null;
-  const courses = [...new Set(overview.map((c) => cleanName(c.course_name)).concat(matches.map((m) => m.course_name)))].sort((a, b) => a.localeCompare(b, 'nb'));
-  const last = matches[0];
+  const courses = [...new Set(overview.map((c) => cleanName(c.course_name)).concat(allMatches.map((m) => m.course_name)))].sort((a, b) => a.localeCompare(b, 'nb'));
+  const last = allMatches[0];
 
-  let h = `${mpTabs()}<section class="hero" style="padding-bottom:14px"><div class="eyebrow">Onsdagsmatchen</div>
+  let h = `${mpTabs()}${closed ? seasonSummary(matches, warmups) : ''}<section class="hero" style="padding-bottom:14px"><div class="eyebrow">Onsdagsmatchen · ${esc(seasonRange().name)}</div>
     <div style="font-family:var(--serif);font-size:24px;font-weight:700;margin:4px 0 2px">${esc(names.p1)} mot ${esc(names.p2)}</div>
     <div class="sub">${matches.length ? (leader ? `${esc(leader.name)} leder med ${signed(leader.pm, 0)} etter ${matches.length} ${matches.length === 1 ? 'runde' : 'runder'}` : `Helt likt etter ${matches.length} ${matches.length === 1 ? 'runde' : 'runder'}`) : 'Ingen matcher registrert ennå'}</div>
     ${series.length > 1 ? `<div id="mpchart" style="margin-top:10px"></div>` : ''}</section>
@@ -641,7 +691,7 @@ async function renderMatchplay() {
       <td class="muted">${r.gn ? (r.gpm > 0 ? '+' : '') + r.gpm : '–'}</td></tr>`).join('')}
   </tbody></table><div class="small muted" style="margin-top:6px">Seier, delt og tap er netto (med tildelte slag). +/− er summen av hull opp eller ned i hver match (3&2 teller 3). Brutto er samme match uten slag${matches.some((m) => !grossOf(m)) ? ', bare for matcher med score per hull' : ''}.</div></div>
 
-  <details class="card" id="mpform" ${matches.length ? '' : 'open'}><summary><b>Registrer match</b></summary>
+  <details class="card" id="mpform" ${allMatches.length ? '' : 'open'} ${closed ? 'style="display:none"' : ''}><summary><b>Registrer match</b></summary>
     <form id="mpf" style="margin-top:8px">
       <div class="row" style="flex-wrap:nowrap"><div style="flex:1"><label for="mpd">Dato</label><input id="mpd" type="date" value="${lastWednesday()}" required></div>
         <div style="flex:1"><label for="mpk">Hvor</label><select id="mpk"><option value="outdoor">Ute</option><option value="simulator">Simulator</option></select></div></div>
@@ -660,7 +710,7 @@ async function renderMatchplay() {
       <div class="row" style="margin-top:14px"><button class="btn primary" type="submit">Lagre match</button><span id="mperr" class="small" style="color:var(--bad)"></span></div>
     </form></details>
 
-  <div class="small muted" style="margin:8px 2px">Simulatormatcher på onsdager registreres automatisk når begge har synket runden fra TrackMan (samme bane, samme dag). Bruk skjemaet for matcher ute.
+  <div class="small muted" style="margin:8px 2px;${closed ? 'display:none' : ''}">Simulatormatcher på onsdager registreres automatisk når begge har synket runden fra TrackMan (samme bane, samme dag). Bruk skjemaet for matcher ute.
     <button class="btn ghost sm" id="mpdetect">Se etter nye nå</button></div>
   <h2>Matcher</h2>
   ${matches.length ? `<div class="card"><ul class="list">${matches.map((m) => {
@@ -677,7 +727,7 @@ async function renderMatchplay() {
         ${mine ? `<button class="btn ghost sm mpdel" data-id="${m.id}" style="margin-top:4px;min-height:28px;padding:2px 8px">Slett</button>` : ''}</div>
       <div style="text-align:center"><div class="score-badge ${m.winner === 0 ? 'even' : 'under'}" style="min-width:74px">${esc(mpResult(m))}<small>${wname ? esc(wname) : 'delt'} · netto</small></div>
         ${(() => { const g = grossOf(m); return g ? `<div class="small muted" style="margin-top:4px">Brutto: ${esc(mpResult(g))}${g.winner ? ' ' + esc(g.winner === 1 ? m.p1_name : m.p2_name) : ''}</div>` : ''; })()}</div></div></li>`;
-  }).join('')}</ul></div>` : `<div class="empty">Registrer den første matchen over.</div>`}`;
+  }).join('')}</ul></div>` : `<div class="empty">${closed ? 'Ingen matcher i denne sesongen.' : 'Ingen matcher ennå denne sesongen. Neste onsdagsmatch registreres automatisk når dere har synket.'}</div>`}`;
   $view.innerHTML = h;
   wireMpTabs();
   $view.querySelectorAll('[data-go-warmup]').forEach((a) => a.onclick = (e) => { e.preventDefault(); mpState.tab = 'warmup'; renderMatchplay(); });
@@ -757,10 +807,13 @@ function wuClubTable(w) {
 }
 
 async function renderWarmup() {
-  const [duels, me] = await Promise.all([
+  const closed = seasonRange().closed;
+  const [allDuels, me, seasonMatches] = await Promise.all([
     q(sb.from('warmup_duels').select('*').order('played_on', { ascending: false }).limit(300)),
     sb.auth.getUser().then((r) => r.data.user),
+    closed ? q(sb.from('matches').select('played_on,p1_name,p2_name,winner,margin')).then((ms) => ms.filter((m) => inSeason(m.played_on))) : [],
   ]);
+  const duels = allDuels.filter((w) => inSeason(w.played_on));
   const active = duels.filter((w) => w.status === 'auto' || w.status === 'bekreftet');
   const cands = duels.filter((w) => w.status === 'kandidat');
   const rejected = duels.filter((w) => w.status === 'avvist');
@@ -788,7 +841,7 @@ async function renderWarmup() {
   const clubRows = [...clubs.values()].filter((c) => c.s1.length + c.s2.length >= 2).sort((x, y) => (avg(x.tgt) ?? 0) - (avg(y.tgt) ?? 0));
   const leadTxt = (t) => t.w1 === t.w2 ? 'Likt' : `${esc(t.w1 > t.w2 ? p1 : p2)} leder`;
 
-  let h = `${mpTabs()}<section class="hero" style="padding-bottom:14px"><div class="eyebrow">Oppvarmingen</div>
+  let h = `${mpTabs()}${closed ? seasonSummary(seasonMatches, duels) : ''}<section class="hero" style="padding-bottom:14px"><div class="eyebrow">Oppvarmingen · ${esc(seasonRange().name)}</div>
     <div style="font-family:var(--serif);font-size:24px;font-weight:700;margin:4px 0 2px">${esc(p1)} mot ${esc(p2)}</div>
     <div class="sub">${active.length ? `${active.length} ${active.length === 1 ? 'oppvarming' : 'oppvarminger'} · snitt ${esc(p1)} ${num2(a1 / active.length)} / ${esc(p2)} ${num2(a2 / active.length)} slag per kølle` : 'Ingen oppvarminger registrert ennå'}</div></section>
   ${active.length ? `<div class="card"><table class="t mp"><thead><tr><th>Poengsystem</th><th>${esc(p1)}</th><th>Delt</th><th>${esc(p2)}</th><th></th></tr></thead><tbody>
@@ -801,9 +854,9 @@ async function renderWarmup() {
     <div class="row" style="flex-wrap:nowrap"><div style="flex:1"><b>${dateNo(w.played_on)}</b><div class="small muted">${esc(w.p1_name)} ${w.e1.shots} slag / ${w.e1.clubs} køller · ${esc(w.p2_name)} ${w.e2.shots} slag / ${w.e2.clubs} køller</div></div>
     ${mine(w) ? `<button class="btn primary sm wuset" data-id="${w.id}" data-s="bekreftet">Bekreft</button><button class="btn ghost sm wuset" data-id="${w.id}" data-s="avvist">Nei</button>` : ''}</div></li>`).join('')}</ul></div>` : ''}
 
-  <div class="small muted" style="margin:8px 2px">Oppvarmingen registreres automatisk når dere begge har synket en Virtual Range-økt samme dag som en match.
+  <div class="small muted" style="margin:8px 2px;${closed ? 'display:none' : ''}">Oppvarmingen registreres automatisk når dere begge har synket en Virtual Range-økt samme dag som en match.
     <button class="btn ghost sm" id="wudetect">Se etter nye nå</button></div>
-  <details class="card"><summary><b>Legg til manuelt</b></summary><div class="small muted" style="margin:6px 0">Velg dagen. Appen kobler sammen Virtual Range-øktene deres fra den dagen, også om de ikke ble funnet automatisk.</div>
+  <details class="card" ${closed ? 'style="display:none"' : ''}><summary><b>Legg til manuelt</b></summary><div class="small muted" style="margin:6px 0">Velg dagen. Appen kobler sammen Virtual Range-øktene deres fra den dagen, også om de ikke ble funnet automatisk.</div>
     <div class="row" style="flex-wrap:nowrap"><input id="wuday" type="date" value="${lastWednesday()}" style="flex:1"><button class="btn primary sm" id="wuadd">Legg til</button></div></details>
 
   <h2>Oppvarminger</h2>
@@ -815,7 +868,7 @@ async function renderWarmup() {
         ${mine(w) ? `<button class="btn ghost sm wuset" data-id="${w.id}" data-s="avvist" style="margin-top:4px;min-height:28px;padding:2px 8px">Ikke oppvarming</button>` : ''}</div>
       <div style="text-align:center"><div class="score-badge ${r.stroke.winner ? 'under' : 'even'}" style="min-width:74px">${num2(r.stroke.winner === 2 ? r.stroke.a2 : r.stroke.a1)}<small>${r.stroke.winner ? esc(wuName(w, r.stroke.winner)) : 'delt'} · slag/kølle</small></div>
         <div class="small muted" style="margin-top:4px">${num2(r.stroke.a1)} – ${num2(r.stroke.a2)}</div></div></div>${wuClubTable(w)}</li>`; }).join('')}</ul></div>`
-    : `<div class="empty">Ingen oppvarminger ennå. Synk begge to etter neste onsdag.</div>`}
+    : `<div class="empty">${closed ? 'Ingen oppvarminger i denne sesongen.' : 'Ingen oppvarminger ennå denne sesongen. Synk begge to etter neste onsdag.'}</div>`}
 
   ${clubRows.length ? `<h2>Hvilke køller koster mest?</h2><div class="card"><table class="t"><thead><tr><th>Kølle</th><th>Mål</th><th>${esc(p1)}</th><th>${esc(p2)}</th></tr></thead><tbody>
     ${clubRows.map((c) => { const x1 = avg(c.s1), x2 = avg(c.s2); return `<tr><td>${esc(c.name)}</td><td style="white-space:nowrap">${fmt(avg(c.tgt))} m</td>
