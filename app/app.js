@@ -750,7 +750,7 @@ function wuClubTable(w) {
   return `<details style="margin-top:6px"><summary class="small">Kølle for kølle</summary><div style="overflow-x:auto"><table class="t" style="font-size:13px;margin-top:4px">
     <thead><tr><th>Kølle</th><th>Mål</th><th>${esc(w.p1_name)}</th><th>${esc(w.p2_name)}</th></tr></thead><tbody>
     ${rows.map(([a, b]) => { const x = hold.get((a || b).club); const r = x ? x.res : 0;
-      return `<tr style="${x && x.counted === false ? 'opacity:.55' : ''}"><td>${esc((a || b).name)}</td><td>${fmt((a || b).tgt)} m</td>
+      return `<tr style="${x && x.counted === false ? 'opacity:.55' : ''}"><td>${esc((a || b).name)}</td><td style="white-space:nowrap">${fmt((a || b).tgt)} m</td>
         <td style="${r > 0 ? 'color:var(--good)' : ''}">${cell(a)}</td><td style="${r < 0 ? 'color:var(--good)' : ''}">${cell(b)}</td></tr>`; }).join('')}
     <tr><td><b>Sum</b></td><td></td><td><b>${w.e1.shots}</b> <span class="muted">(${w.e1.clubs} køller)</span></td><td><b>${w.e2.shots}</b> <span class="muted">(${w.e2.clubs} køller)</span></td></tr>
     </tbody></table></div><div class="small muted">Grønt = vant kølla i matchplay. ● liten sirkel, ◐ stor sirkel, ○ bom.${w.e1.hit_data && w.e2.hit_data ? '' : ' Treff vises når begge har synket med utvidelse 0.5.0.'}</div></details>`;
@@ -812,14 +812,13 @@ async function renderWarmup() {
         <div class="small muted">${esc(w.p1_name)} ${w.e1.shots} slag på ${w.e1.clubs} køller · ${esc(w.p2_name)} ${w.e2.shots} slag på ${w.e2.clubs} køller</div>
         <div class="small">Matchplay: <b>${esc(wuMatchRes(r.match))}</b>${r.match.winner ? ' ' + esc(wuName(w, r.match.winner)) : ''}${r.match.n ? ` <span class="muted">(${r.match.n} felles køller)</span>` : ''}
           ${r.eff ? ` · Effektivitet: ${num2(r.eff.e1)} / ${num2(r.eff.e2)}${r.eff.winner ? ' <b>' + esc(wuName(w, r.eff.winner)) + '</b>' : ''}` : ''}</div>
-        ${wuClubTable(w)}
         ${mine(w) ? `<button class="btn ghost sm wuset" data-id="${w.id}" data-s="avvist" style="margin-top:4px;min-height:28px;padding:2px 8px">Ikke oppvarming</button>` : ''}</div>
       <div style="text-align:center"><div class="score-badge ${r.stroke.winner ? 'under' : 'even'}" style="min-width:74px">${num2(r.stroke.winner === 2 ? r.stroke.a2 : r.stroke.a1)}<small>${r.stroke.winner ? esc(wuName(w, r.stroke.winner)) : 'delt'} · slag/kølle</small></div>
-        <div class="small muted" style="margin-top:4px">${num2(r.stroke.a1)} – ${num2(r.stroke.a2)}</div></div></div></li>`; }).join('')}</ul></div>`
+        <div class="small muted" style="margin-top:4px">${num2(r.stroke.a1)} – ${num2(r.stroke.a2)}</div></div></div>${wuClubTable(w)}</li>`; }).join('')}</ul></div>`
     : `<div class="empty">Ingen oppvarminger ennå. Synk begge to etter neste onsdag.</div>`}
 
   ${clubRows.length ? `<h2>Hvilke køller koster mest?</h2><div class="card"><table class="t"><thead><tr><th>Kølle</th><th>Mål</th><th>${esc(p1)}</th><th>${esc(p2)}</th></tr></thead><tbody>
-    ${clubRows.map((c) => { const x1 = avg(c.s1), x2 = avg(c.s2); return `<tr><td>${esc(c.name)}</td><td>${fmt(avg(c.tgt))} m</td>
+    ${clubRows.map((c) => { const x1 = avg(c.s1), x2 = avg(c.s2); return `<tr><td>${esc(c.name)}</td><td style="white-space:nowrap">${fmt(avg(c.tgt))} m</td>
       <td>${x1 === null ? '–' : `<b style="${x1 >= 3 ? 'color:var(--bad)' : ''}">${fmt(x1, 1)}</b> <span class="muted small">(${c.s1.length})</span>`}</td>
       <td>${x2 === null ? '–' : `<b style="${x2 >= 3 ? 'color:var(--bad)' : ''}">${fmt(x2, 1)}</b> <span class="muted small">(${c.s2.length})</span>`}</td></tr>`; }).join('')}
   </tbody></table><div class="small muted" style="margin-top:6px">Snitt antall slag før regelen var oppfylt (antall oppvarminger i parentes). Rødt = 3 slag eller mer.</div></div>` : ''}
