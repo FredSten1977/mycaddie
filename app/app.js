@@ -682,7 +682,7 @@ async function renderMatchplay() {
 
   let h = `${mpTabs()}${closed ? seasonSummary(matches, warmups) : ''}<section class="hero" style="padding-bottom:14px"><div class="eyebrow">Onsdagsmatchen · ${esc(seasonRange().name)}</div>
     <div style="font-family:var(--serif);font-size:24px;font-weight:700;margin:4px 0 2px">${esc(names.p1)} mot ${esc(names.p2)}</div>
-    <div class="sub">${matches.length ? (leader ? `${esc(leader.name)} leder med ${signed(leader.pm, 0)} etter ${matches.length} ${matches.length === 1 ? 'runde' : 'runder'}` : `Helt likt etter ${matches.length} ${matches.length === 1 ? 'runde' : 'runder'}`) : 'Ingen matcher registrert ennå'}</div>
+    <div class="sub">${matches.length ? (leader ? `${esc(leader.name)} ${closed ? 'vant med' : 'leder med'} ${signed(leader.pm, 0)} etter ${matches.length} ${matches.length === 1 ? 'runde' : 'runder'}` : `Helt likt etter ${matches.length} ${matches.length === 1 ? 'runde' : 'runder'}`) : 'Ingen matcher registrert ennå'}</div>
     ${series.length > 1 ? `<div id="mpchart" style="margin-top:10px"></div>` : ''}</section>
   ${matches.some((m) => m.auto && (m.p1_hcp === null || m.p2_hcp === null)) ? `<div class="card warn small">Noen matcher er regnet <b>brutto</b> fordi hcp ikke er hentet fra TrackMan ennå. Oppdater Chrome-utvidelsen til versjon 0.4.0 og synk, så hentes hcp fra scorekortene og matchene regnes om.</div>` : ''}
   <div class="card"><table class="t mp"><thead><tr><th>Spiller</th><th>Runder</th><th>Seier</th><th>Delt</th><th>Tap</th><th>+/− netto</th><th>+/− brutto</th></tr></thead><tbody>
