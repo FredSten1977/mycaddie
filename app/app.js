@@ -114,6 +114,37 @@ const simRoundCount = () => cached('rounds:sim:count', async () => {
     .eq('kind', 'simulator').is('superseded_by', null).eq('counts_in_stats', true);
   if (error) throw error; return count || 0;
 });
+// TrackMan handicap as registered on each scorecard (rounds.conditions.tm_hcp), newest first
+const getTmHcp = () => cached('rounds:tmhcp', async () => {
+  const rows = await q(sb.from('rounds').select('played_on,tm_hcp:conditions->>tm_hcp,session:sessions(started_at)')
+    .eq('kind', 'simulator').not('conditions->>tm_hcp', 'is', null).gte('played_on', isoDaysAgo(400))
+    .order('played_on', { ascending: false }).limit(500));
+  return rows.map((r) => ({ d: r.played_on, t: r.session?.started_at || r.played_on, v: +r.tm_hcp }))
+    .filter((r) => Number.isFinite(r.v)).sort((a, b) => (a.t < b.t ? 1 : a.t > b.t ? -1 : 0));
+});
+// Plus handicaps are stored as negative numbers by TrackMan
+const hcpTxt = (v) => v === null || v === undefined ? '–' : (v < 0 ? '+' : '') + fmt(Math.abs(v), 1);
+function hcpCard(rows) {
+  if (!rows.length) return '';
+  const cur = rows[0];
+  const ref = rows.find((r) => r.d <= isoDaysAgo(30));
+  const diff = ref ? Math.round((cur.v - ref.v) * 10) / 10 : null;
+  // One point per day (last value of the day), last 90 days, oldest first
+  const days = new Map(); for (const r of rows) if (r.d >= isoDaysAgo(90) && !days.has(r.d)) days.set(r.d, r.v);
+  const pts = [...days.entries()].reverse();
+  let spark = '';
+  if (pts.length > 1) {
+    const vs = pts.map((p) => p[1]), lo = Math.min(...vs), hi = Math.max(...vs), span = hi - lo || 1, W = 120, H = 36;
+    const xy = pts.map((p, i) => [(i / (pts.length - 1)) * W, 3 + ((p[1] - lo) / span) * (H - 6)]); // lower hcp is drawn higher (small y = top)
+    spark = `<svg class="hcp-spark" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" aria-hidden="true"><polyline fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" points="${xy.map(([x, y]) => x.toFixed(1) + ',' + y.toFixed(1)).join(' ')}"/><circle cx="${xy.at(-1)[0].toFixed(1)}" cy="${xy.at(-1)[1].toFixed(1)}" r="3" fill="currentColor"/></svg>`;
+  }
+  const chg = diff === null ? '' : diff === 0 ? `<span class="hcp-chg">uendret siste 30 dager</span>`
+    : `<span class="hcp-chg ${diff < 0 ? 'good' : 'bad'}">${diff < 0 ? '▼' : '▲'} ${fmt(Math.abs(diff), 1)} siste 30 dager</span>`;
+  return `<div class="card hcp-card"><div class="row" style="flex-wrap:nowrap;align-items:center">
+    <div><div class="small muted">TrackMan HCP</div><div class="hcp-v num">${hcpTxt(cur.v)}</div>
+      <div class="small">${chg}</div><div class="small muted">Fra scorekortet ${dateNo(cur.d)}</div></div>
+    <span class="spacer"></span>${spark}</div></div>`;
+}
 const reviewCount = () => cached('review:count', async () => {
   const { count, error } = await sb.from('v_shots').select('id', { count: 'exact', head: true })
     .like('reason', '%mulig feil kølle%').eq('club_reviewed', false).eq('excluded', false);
@@ -184,7 +215,7 @@ async function renderSetPassword() {
 async function renderHome() {
   $title.textContent = 'My Caddie';
   $view.innerHTML = `<div class="loading">Laster…</div>`;
-  const [sync, nReview, overview, summary, simRounds, profile, img, simTotal] = await Promise.all([
+  const [sync, nReview, overview, summary, simRounds, profile, img, simTotal, tmHcp] = await Promise.all([
     q(sb.from('sync_runs').select('started_at,status,new_shots,message').order('started_at', { ascending: false }).limit(1)),
     reviewCount(), getOverview(),
     cached('summary:365', () => q(sb.rpc('round_summary', { p_from: isoDaysAgo(365), p_to: today() }))),
@@ -192,6 +223,7 @@ async function renderHome() {
     getProfile(isoDaysAgo(365), today(), 'practice,map_my_bag,course_play'),
     imageIndex(),
     simRoundCount(),
+    getTmHcp().catch((e) => { console.error(e); return []; }),
   ]);
   const last = sync[0];
   const ageDays = last ? (Date.now() - new Date(last.started_at)) / 864e5 : Infinity;
@@ -218,6 +250,7 @@ async function renderHome() {
       <div class="sub">snitt mot par siste 5 runder</div>
       <div class="hero-stats"><div><b>${signed(+sim18.to_par_avg)}</b>snitt 12 mnd</div><div><b>${best === null ? '–' : signed(best, 0)}</b>beste siste 30</div><div><b>${fmt(simTotal)}</b>runder totalt</div></div>
       <div class="spark" id="spark"></div></section>`;
+  h += hcpCard(tmHcp);
   if (ageDays > 7 && last) h += `<div class="card warn"><b>TrackMan-synken har ikke gått på ${last ? Math.floor(ageDays) + ' dager' : 'lenge'}.</b>
     <div class="small">Åpne Chrome med My Caddie Sync, eller trykk «Synk nå» i utvidelsen.</div></div>`;
   if (nReview > 0) h += `<a class="card link accent" href="#/sjekk"><div class="review-hero"><div class="count">${fmt(nReview)}</div>

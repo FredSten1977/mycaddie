@@ -309,3 +309,9 @@ input:focus, select:focus { outline: 2px solid var(--gold-2); outline-offset: 1p
 table.mp td b.neg { color: var(--good); } table.mp td b.pos { color: var(--bad); }
 table.mp td, table.mp th { font-size: 14px; padding: 7px 3px; }
 table.mp th { font-size: 11px; line-height: 1.2; }
+
+/* TrackMan handicap card on the home page */
+.hcp-card .hcp-v { font-family: var(--serif); font-size: 38px; font-weight: 750; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.hcp-card .hcp-chg.good { color: var(--accent); font-weight: 600; }
+.hcp-card .hcp-chg.bad { color: var(--bad); font-weight: 600; }
+.hcp-card .hcp-spark { color: var(--accent); flex: 0 0 auto; }
